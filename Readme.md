@@ -15,8 +15,11 @@ from vortex_api import Constants as Vc
 
 client = VortexAPI("your api secret","your application id")
 
-#For client login using TOTP
-client.login("client code","client password","totp")
+print(client.login_url(callback_param="hi"))
+
+client.exchange_token("auth token received in the callback url")
+
+client.orders(limit=20, offset=1)
 
 # Place order 
 
