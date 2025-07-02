@@ -5,6 +5,7 @@ import logging
 from enum import Enum
 import inspect
 import wrapt
+import hashlib
 
 class Constants: 
     """
@@ -15,7 +16,9 @@ class Constants:
         Constants for exchanges
         """
         NSE_FO = "NSE_FO"
+        BSE_FO = "BSE_FO"
         NSE_EQUITY = "NSE_EQ"
+        BSE_EQUITY = "BSE_EQ"
         NSE_CURRENCY = "NSE_CD"
         MCX = "MCX_FO"
 
@@ -146,16 +149,16 @@ def validate_selected_methods(method_names):
     return decorator
 
 @validate_selected_methods(['login','place_order','modify_order','cancel_order','get_order_margin','historical_candles','quotes'])
-class AsthaTradeVortexAPI:
+class VortexAPI:
 
-    def __init__(self, api_key: str, application_id: str, base_url: str = "https://vortex.restapi.asthatrade.com",enable_logging: bool=False) -> None:
+    def __init__(self, api_key: str, application_id: str, base_url: str = "https://vortex-api.rupeezy.in/v2",enable_logging: bool=False) -> None:
         """
-        Constructor method for AsthaTradeAPI class.
+        Constructor method for VortexAPI class.
 
         Args:
-            api_key (str): API key for the Astha Trade API.
-            api_secret (str): API secret for the Astha Trade API.
-            base_url (str, optional): Base URL for the Astha Trade API. Defaults to "https://vortex.restapi.asthatrade.com".
+            api_key (str): API key for the Vortex API.
+            api_secret (str): API secret for the Vortex API.
+            base_url (str, optional): Base URL for the Vortex API. Defaults to "https://vortex-api.rupeezy.in/v2".
         """
         self.api_key = api_key
         self.application_id = application_id
@@ -167,7 +170,7 @@ class AsthaTradeVortexAPI:
     
     def _make_api_request(self, method: str, endpoint: str, data: dict = None, params=None) -> dict:
         """
-        Private method to make HTTP requests to the Astha Trade API.
+        Private method to make HTTP requests to the Vortex API.
 
         Args:
             method (str): HTTP method for the request (e.g. "GET", "POST", "PUT", "DELETE").
@@ -195,7 +198,7 @@ class AsthaTradeVortexAPI:
     
     def _make_unauth_request(self, method: str, endpoint: str, data: dict = None, params: dict = None) -> dict:
         """
-        Private method to make HTTP requests to the Astha Trade API.
+        Private method to make HTTP requests to the Vortex API.
 
         Args:
             method (str): HTTP method for the request (e.g. "GET", "POST", "PUT", "DELETE").
@@ -217,10 +220,10 @@ class AsthaTradeVortexAPI:
     
     def login(self, client_code: str, password: str, totp: str)->dict:
         """
-        Login using password and totp directly
+        Depricating Soon. Use SSO Login instead. Login using password and totp directly
         
         Documentation:
-            https://vortex.asthatrade.com/docs/authentication/
+            https://vortex.rupeezy.in/docs/authentication/
 
         Args:
             client_code(str): Client Code of the account
@@ -246,7 +249,7 @@ class AsthaTradeVortexAPI:
         Download list of all available instruments and their details across all exchanges
 
         Documentation:
-            https://vortex.asthatrade.com/docs/historical/#fetch-all-instruments
+            https://vortex.rupeezy.in/docs/historical/#instrument-list
 
         Returns:
             dict: CSV Array of all instruments. The first row contains headers
@@ -267,10 +270,10 @@ class AsthaTradeVortexAPI:
         Place an order for a specific security
 
         Documentation:
-            https://vortex.asthatrade.com/docs/order/#placing-an-order
+            https://vortex.rupeezy.in/docs/order/#placing-an-order
 
         Args:
-            exchange (Constants.ExchangeTypes): Possible values: [NSE_EQ, NSE_FO, NSE_CD or MCX_FO]
+            exchange (Constants.ExchangeTypes): Possible values: [NSE_EQ, NSE_FO, BSE_EQ, BSE_FO, NSE_CD or MCX_FO]
             token (int): Security token of the scrip. It can be found in the scripmaster file
             transaction_type (Constants.TransactionSides): Possible values: [BUY, SELL]
             product (Constants.ProductTypes): Possible values: [INTRADAY, DELIVERY, MTF]. MTF product can only be used in NSE_EQ exchange.
@@ -294,7 +297,7 @@ class AsthaTradeVortexAPI:
             HTTPError: If any HTTP error occurs during the API call
         """
 
-        endpoint = "/orders/regular"
+        endpoint = "/trading/orders/regular"
         if validity == Constants.ValidityTypes.FULL_DAY: 
             validity_days = 1 
             is_amo = False
@@ -322,15 +325,15 @@ class AsthaTradeVortexAPI:
         
         return self._make_api_request("POST", endpoint, data=data)
     
-    def modify_order(self,exchange: Constants.ExchangeTypes, order_id: str, variety: Constants.VarietyTypes, quantity: int, traded_quantity: int, price: float, trigger_price: float, disclosed_quantity: int, validity: Constants.ValidityTypes) -> dict:
+    def modify_order(self, order_id: str, variety: Constants.VarietyTypes, quantity: int, traded_quantity: int, price: float, trigger_price: float, disclosed_quantity: int, validity: Constants.ValidityTypes) -> dict:
         """
-        Method to modify an order using the Astha Trade API.
+        Method to modify an order using the Vortex API.
 
         Documentation:
-            https://vortex.asthatrade.com/docs/order/#modifying-an-order
+            https://vortex.rupeezy.in/docs/order/#modifying-an-order
 
         Args:
-            exchange (Constants.ExchangeTypes): Possible values: [NSE_EQ, NSE_FO, NSE_CD or MCX_FO]
+            exchange (Constants.ExchangeTypes): Possible values: [NSE_EQ, NSE_FO, BSE_EQ, BSE_FO, NSE_CD or MCX_FO]
             order_id (str): The unique ID of the order to modify.
             variety (Constants.VarietyTypes): Possible values: [RL, RL-MKT, SL, SL-MKT]. RL means regular orders, SL means Stop Loss order. 
                     MKT means that the trade will happen at market price
@@ -344,7 +347,8 @@ class AsthaTradeVortexAPI:
         Returns:
             dict: Dictionary containing the response data from the API.
         """
-        endpoint = f"/orders/regular/{exchange}/{order_id}"
+
+        endpoint = f"/trading/orders/regular/{order_id}"
         if validity == Constants.ValidityTypes.FULL_DAY: 
             validity_days = 1 
         elif validity == Constants.ValidityTypes.IMMEDIATE_OR_CANCEL: 
@@ -364,22 +368,22 @@ class AsthaTradeVortexAPI:
         }
         return self._make_api_request("PUT", endpoint, data=data)
     
-    def cancel_order(self,exchange: Constants.ExchangeTypes, order_id: str) -> dict:
+    def cancel_order(self, order_id: str) -> dict:
         """
-        Method to cancel an order using the Astha Trade API.
+        Method to cancel an order using the Vortex API.
 
         Documentation:
-            https://vortex.asthatrade.com/docs/order/#cancel-an-order
+            https://vortex.rupeezy.in/docs/order/#cancel-an-order
 
         Args:
-            exchange (Constants.ExchangeTypes): Possible values: [NSE_EQ, NSE_FO, NSE_CD or MCX_FO]
+            exchange (Constants.ExchangeTypes): Possible values: [NSE_EQ, NSE_FO, BSE_EQ, BSE_FO, NSE_CD or MCX_FO]
             order_id (str): The unique ID of the order to cancel.
 
         Returns:
             dict: Dictionary containing the response data from the API.
         """
         
-        endpoint = f"/orders/regular/{exchange}/{order_id}"
+        endpoint = f"/trading/orders/regular/{order_id}"
         return self._make_api_request("DELETE", endpoint)
 
     def orders(self,limit: int, offset: int) -> dict:
@@ -387,7 +391,7 @@ class AsthaTradeVortexAPI:
         Method to get all orders.
 
         Documentation:
-            https://vortex.asthatrade.com/docs/order/#fetching-order-book
+            https://vortex.rupeezy.in/docs/order/#fetching-order-book
 
         Args:
             limit (int): Limit is the number of orders to be fetched. 
@@ -396,7 +400,7 @@ class AsthaTradeVortexAPI:
         Returns:
             dict: Dictionary containing the response data from the API.
         """
-        endpoint = f"/orders?limit={limit}&offset={offset}"
+        endpoint = f"/trading/orders?limit={limit}&offset={offset}"
         return self._make_api_request("GET", endpoint)
     
     def order_history(self,order_id: str) -> dict:
@@ -404,7 +408,7 @@ class AsthaTradeVortexAPI:
         Method to get the order history of a particular order
 
         Documentation:
-            https://vortex.asthatrade.com/docs/order/
+            https://vortex.rupeezy.in/docs/order/
 
         Args:
             order_id (str): Order id for which history has to be fetched
@@ -412,54 +416,54 @@ class AsthaTradeVortexAPI:
         Returns:
             dict: Dictionary containing the response data from the API.
         """
-        endpoint = f"/orders/{order_id}"
+        endpoint = f"/trading/orders/{order_id}"
         return self._make_api_request("GET", endpoint)
 
     def positions(self) -> dict:
         """
-        Method to get the position book using the Astha Trade API.
+        Method to get the position book using the Vortex API.
 
         Documentation:
-            https://vortex.asthatrade.com/docs/positions/#fetch-all-positions
+            https://vortex.rupeezy.in/docs/positions/#fetch-all-positions
 
         Returns:
             dict: Dictionary containing the response data from the API.
         """
-        endpoint = f"/portfolio/positions"
+        endpoint = f"/trading/portfolio/positions"
         return self._make_api_request("GET", endpoint)
     
     def holdings(self) -> dict:
         """
-        Method to get the holdings of the user using the Astha Trade API.
+        Method to get the holdings of the user using the Vortex API.
 
         Documentation:    
-            https://vortex.asthatrade.com/docs/holdings/
+            https://vortex.rupeezy.in/docs/holdings/
 
         Returns:
             dict: Dictionary containing the response data from the API.
         """
-        endpoint = "/portfolio/holdings"
+        endpoint = "/trading/portfolio/holdings"
         return self._make_api_request("GET", endpoint)
     
     def trades(self) -> dict:
         """
-        Method to get today's trades of the user using the Astha Trade API.
+        Method to get today's trades of the user using the Vortex API.
 
         Documentation:    
-            https://vortex.asthatrade.com/docs/positions/#get-trades
+            https://vortex.rupeezy.in/docs/positions/#get-trades
 
         Returns:
             dict: Dictionary containing the response data from the API.
         """
-        endpoint = "/trades"
+        endpoint = "/trading/trades"
         return self._make_api_request("GET", endpoint)
     
     def funds(self) -> dict:
         """
-        Method to get the funds of the user using the Astha Trade API.
+        Method to get the funds of the user using the Vortex API.
 
         Documentation:    
-            https://vortex.asthatrade.com/docs/user/#available-funds
+            https://vortex.rupeezy.in/docs/user/#available-funds
 
         Returns:
             dict: Dictionary containing the response data from the API.
@@ -473,10 +477,10 @@ class AsthaTradeVortexAPI:
         Get the margin required for placing an order for a specific security.
 
         Documentation:    
-            https://vortex.asthatrade.com/docs/margin/#order-margin
+            https://vortex.rupeezy.in/docs/margin/#order-margin
 
         Args:
-            exchange (Constants.ExchangeTypes): Possible values: [NSE_EQ, NSE_FO, NSE_CD or MCX_FO]
+            exchange (Constants.ExchangeTypes): Possible values: [NSE_EQ, NSE_FO, BSE_EQ, BSE_FO, NSE_CD or MCX_FO]
             token (int): Security token of the scrip. It can be found in the scripmaster file
             transaction_type (Constants.TransactionSides): Possible values: [BUY, SELL]
             product (Constants.ProductTypes): Possible values: [INTRADAY, DELIVERY, MTF]. MTF product can only be used in NSE_EQ exchange.
@@ -520,7 +524,7 @@ class AsthaTradeVortexAPI:
         Gets quotes of up to 1000 instruments at a time. 
 
         Documentation:    
-            https://vortex.asthatrade.com/docs/historical/#fetch-price-quotes
+            https://vortex.rupeezy.in/docs/historical/#fetch-price-quotes
 
         Args:
             instrument(list): List of instruments. The items should be like ( "NSE_EQ-22", "NSE_FO-1234")
@@ -530,7 +534,7 @@ class AsthaTradeVortexAPI:
             dict: JSON response containing quotes. It is possible that not all the symbol identifiers you passed had a quote available. Those inputs will be missing from the response.
             Also, the order of output might be different than the order of input
         """
-        endpoint = "/data/quote"
+        endpoint = "/data/quotes"
         params = {"q": instruments,"mode": mode}
         return self._make_api_request("GET", endpoint, data=None,params=params)
     
@@ -539,10 +543,10 @@ class AsthaTradeVortexAPI:
         Gets historical candle data of a particular instrument. 
 
         Documentation:    
-            https://vortex.asthatrade.com/docs/historical/#fetch-historical-candle-data
+            https://vortex.rupeezy.in/docs/historical/#fetch-historical-candle-data
 
         Args:
-            exchange (Constants.ExchangeTypes): Possible values: [NSE_EQ, NSE_FO, NSE_CD or MCX_FO]
+            exchange (Constants.ExchangeTypes): Possible values: [NSE_EQ, NSE_FO, BSE_EQ, BSE_FO, NSE_CD or MCX_FO]
             token (int): Security token of the scrip. It can be found in the instruments master file: 
             to (datetime): datetime up till when you want to receive candles 
             start (datetime): datetime from when you want to receive candles 
@@ -564,7 +568,48 @@ class AsthaTradeVortexAPI:
         params = {"exchange": exchange,"token": token , "to": int(to.timestamp()), "from": int(start.timestamp()), "resolution": resolution}
         return self._make_api_request("GET", endpoint, data=None,params=params)
 
+    def login_url(self, callback_param: str) -> str:
+        """
+        Returns the login URL for the Vortex API.
+
+        Documentation:
+            https://vortex.rupeezy.in/docs/authentication/
+
+        Returns:
+            str: The login URL for the Vortex API.
+        """
+
+        return f"https://flow.rupeezy.in?applicationId={self.application_id}&cb_param={callback_param}"
     
+    def exchange_token(self,auth_code: str) -> dict:
+        """
+        Exchange the auth code received from the login URL for an access token.
+
+        Documentation:
+            https://vortex.rupeezy.in/docs/authentication/
+
+        Args:
+            auth_code (str): The authorization code received from the login URL.
+
+        Returns:
+            dict: JSON response containing the details of the user
+        """
+
+        endpoint = "/user/session"
+        data = {
+            "token": auth_code,
+            "applicationId": self.application_id, 
+            "checksum": self._sha256_hash(f"{self.application_id}{auth_code}{self.api_key}")
+        }
+        res = self._make_unauth_request("POST", endpoint= endpoint, data=data)
+        self._setup_client_code(login_object=res)
+        return res
+
+    def _sha256_hash(self,text: str) -> str:
+        sha = hashlib.sha256()
+        sha.update(text.encode('utf-8'))
+        return sha.hexdigest()
+
     def _setup_client_code(self, login_object: dict) -> bool: 
         """ 
         Sets up access token after login

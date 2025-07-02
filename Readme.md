@@ -10,10 +10,10 @@ pip install vortex-api
 # Api Usage 
 
 ```python 
-from vortex_api import AsthaTradeVortexAPI
+from vortex_api import VortexAPI
 from vortex_api import Constants as Vc
 
-client = AsthaTradeVortexAPI("your api secret","your application id")
+client = VortexAPI("your api secret","your application id")
 
 #For client login using TOTP
 client.login("client code","client password","totp")
@@ -41,7 +41,7 @@ client.orders(limit=20,offset=1)
 # Connecting to websocket
 
 Using the feed, you can listen to both price quote changes and order/trade updates. You need to define your own callbacks for `on_price_update`
-and `on_order_update`. The packet structure for `on_order_update` is the same as that received in postbacks and is available [here](https://vortex.asthatrade.com/docs/postbacks/)
+and `on_order_update`. The packet structure for `on_order_update` is the same as that received in postbacks and is available [here](https://vortex.rupeezy.in/docs/postbacks/)
 
 ```python
 from vortex_api import VortexFeed
@@ -80,5 +80,5 @@ if __name__ == "__main__":
     main()
 
 ```
-Refer to the [python document](https://vortex.asthatrade.com/docs/pyvortex/vortex_api.html) for all methods and features
+Refer to the [python document](https://vortex.rupeezy.in/docs/pyvortex/vortex_api.html) for all methods and features
 

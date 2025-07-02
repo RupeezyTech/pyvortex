@@ -234,7 +234,7 @@ class VortexFeed:
     _message_subscribe = "subscribe"
     _message_unsubscribe = "unsubscribe"
 
-    def __init__(self, access_token: str, websocket_endpoint="wss://wire.asthatrade.com/ws",reconnect=True, reconnect_max_tries=RECONNECT_MAX_TRIES, reconnect_max_delay=RECONNECT_MAX_DELAY,
+    def __init__(self, access_token: str, websocket_endpoint="wss://wire.rupeezy.in/ws",reconnect=True, reconnect_max_tries=RECONNECT_MAX_TRIES, reconnect_max_delay=RECONNECT_MAX_DELAY,
                  connect_timeout=CONNECT_TIMEOUT, debug = False) -> None:
         self._maximum_reconnect_max_tries = self.RECONNECT_MAX_TRIES
         self._minimum_reconnect_max_delay = 0 

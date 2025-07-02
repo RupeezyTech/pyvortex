@@ -1,10 +1,10 @@
 """
-Vortex API client for Python -- [Visit Api Center](https://vortex.asthatrade.com).
+Vortex API client for Python -- [Visit Api Center](https://vortex.rupeezy.in).
 Astha Credit & Securities Pvt. Ltd. (c) 2023
 
 License
 -------
-AsthaTrade's Vortex Python library is licensed under the MIT License
+Rupeezy's Vortex Python library is licensed under the MIT License
 
 The library
 -----------
@@ -17,12 +17,12 @@ the hassle of managing the apis.
 Getting started
 ---------------
     #!python
-    from vortex_api import AsthaTradeVortexAPI
+    from vortex_api import VortexAPI
 
-    client = AsthaTradeVortexAPI("your api secret","your application id")
+    client = VortexAPI("your api secret","your application id")
 
-    #For client login using TOTP
-    client.login("client code","client password","totp")
+    #For client login using SSO
+    client.login_url(callback_param="hi)
 
     # Place order 
 
@@ -33,6 +33,6 @@ Getting started
 
 """
 from __future__ import unicode_literals, absolute_import
-from vortex_api.api import AsthaTradeVortexAPI,Constants
+from vortex_api.api import VortexAPI,Constants
 from vortex_api.vortex_feed import VortexFeed
-__all__ = [AsthaTradeVortexAPI,Constants,VortexFeed]
+__all__ = [VortexAPI,Constants,VortexFeed]
