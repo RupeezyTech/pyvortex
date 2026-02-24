@@ -234,7 +234,7 @@ class VortexFeed:
     _message_subscribe = "subscribe"
     _message_unsubscribe = "unsubscribe"
 
-    def __init__(self, access_token: str, websocket_endpoint="wss://wire.rupeezy.in/ws",reconnect=True, reconnect_max_tries=RECONNECT_MAX_TRIES, reconnect_max_delay=RECONNECT_MAX_DELAY,
+    def __init__(self, access_token: str=None, websocket_endpoint="wss://wire.rupeezy.in/ws",reconnect=True, reconnect_max_tries=RECONNECT_MAX_TRIES, reconnect_max_delay=RECONNECT_MAX_DELAY,
                  connect_timeout=CONNECT_TIMEOUT, debug = False) -> None:
         self._maximum_reconnect_max_tries = self.RECONNECT_MAX_TRIES
         self._minimum_reconnect_max_delay = 0 
@@ -255,6 +255,12 @@ class VortexFeed:
             self.reconnect_max_delay = reconnect_max_delay
         
         self.connect_timeout = connect_timeout
+        if access_token == None:
+            if os.getenv("VORTEX_ACCESS_TOKEN") != None:
+                access_token = os.getenv("VORTEX_ACCESS_TOKEN")
+            else:
+                raise ValueError("Access token must be provided either as an argument or through the VORTEX_ACCESS_TOKEN environment variable.")
+            
         self.socket_url = websocket_endpoint+"?auth_token="+access_token
         self.access_token = access_token
         self.socket_token = self.__getSocketToken__(self.access_token)

@@ -6,7 +6,7 @@ from enum import Enum
 import inspect
 import wrapt
 import hashlib
-
+import os
 class Constants: 
     """
     Constants used in the API
@@ -151,19 +151,34 @@ def validate_selected_methods(method_names):
 @validate_selected_methods(['login','place_order','modify_order','cancel_order','get_order_margin','historical_candles','quotes'])
 class VortexAPI:
 
-    def __init__(self, api_key: str, application_id: str, base_url: str = "https://vortex-api.rupeezy.in/v2",enable_logging: bool=False) -> None:
+    def __init__(self, api_key: str = None , application_id: str = None, base_url: str = "https://vortex-api.rupeezy.in/v2",enable_logging: bool=False) -> None:
         """
         Constructor method for VortexAPI class.
 
         Args:
-            api_key (str): API key for the Vortex API.
-            api_secret (str): API secret for the Vortex API.
+            api_key (str, optional): API key for the Vortex API. You can either pass it as an argument or set it as an environment variable named VORTEX_API_KEY.
+            application_id (str, optional): Application ID for the Vortex API. You can either pass it as an argument or set it as an environment variable named VORTEX_APPLICATION_ID.
             base_url (str, optional): Base URL for the Vortex API. Defaults to "https://vortex-api.rupeezy.in/v2".
         """
+        if api_key == None:
+            if os.getenv("VORTEX_API_KEY") != None:
+                api_key = os.getenv("VORTEX_API_KEY")
+            else:
+                raise ValueError("API key must be provided either as an argument or through the VORTEX_API_KEY environment variable.")
+        
+        if application_id == None:
+            if os.getenv("VORTEX_APPLICATION_ID") != None:
+                application_id = os.getenv("VORTEX_APPLICATION_ID")
+            else:
+                raise ValueError("Application ID must be provided either as an argument or through the VORTEX_APPLICATION_ID environment variable.")
         self.api_key = api_key
         self.application_id = application_id
         self.base_url = base_url
-        self.access_token = None
+        if os.getenv("VORTEX_ACCESS_TOKEN") != None:
+            self.access_token = os.getenv("VORTEX_ACCESS_TOKEN")
+        else:
+            self.access_token = None
+
         self.enable_logging = enable_logging
         if self.enable_logging:
             logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -254,11 +269,9 @@ class VortexAPI:
         Returns:
             dict: CSV Array of all instruments. The first row contains headers
         """
-        endpoint = "/data/instruments"
-        bearer_token = f"Bearer {self.access_token}"
-        headers = {"Content-Type": "application/json", "Authorization": bearer_token}
+        endpoint = "https://static.rupeezy.in/master.csv"
         with requests.Session() as s: 
-            download = s.get(url=self.base_url + endpoint,headers=headers)
+            download = s.get(url=endpoint)
             decoded_content = download.content.decode('utf-8')
             cr = csv.reader(decoded_content.splitlines(), delimiter=',')
             my_list = list(cr)
