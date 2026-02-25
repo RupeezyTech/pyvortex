@@ -5,6 +5,7 @@ import json
 import struct
 import logging
 import threading
+import os
 from twisted.internet import reactor, ssl
 from twisted.python import log as twisted_log
 from twisted.internet.protocol import ReconnectingClientFactory
