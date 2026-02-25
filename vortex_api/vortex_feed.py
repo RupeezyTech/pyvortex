@@ -314,7 +314,9 @@ class VortexFeed:
         # Set SSL context
         context_factory = None
         if self.factory.isSecure and not disable_ssl_verification:
-            context_factory = ssl.ClientContextFactory()
+            from urllib.parse import urlparse
+            hostname = urlparse(self.socket_url).hostname
+            context_factory = ssl.optionsForClientTLS(hostname)
 
         # Establish WebSocket connection to a server
         connectWS(self.factory, contextFactory=context_factory, timeout=self.connect_timeout)
