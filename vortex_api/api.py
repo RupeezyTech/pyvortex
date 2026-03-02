@@ -710,47 +710,63 @@ def _duration_to_days(val):
 
 
 def _serialize_stats(stats, name, symbol, description, tags):
-    """Convert backtesting.py Stats object to a JSON-serializable dict."""
+    def _sf(val):
+        if val is None:
+            return 0.0
+        try:
+            f = float(val)
+            return 0.0 if (math.isnan(f) or math.isinf(f)) else round(f, 4)
+        except (ValueError, TypeError):
+            return 0.0
 
-    # --- Summary metrics ---
+    def _dd(val):
+        if val is None:
+            return 0
+        try:
+            return val.days
+        except AttributeError:
+            return 0
+
     summary = {
-        "return_pct": _safe_float(stats.get("Return [%]")),
-        "return_ann_pct": _safe_float(stats.get("Return (Ann.) [%]")),
-        "volatility_ann_pct": _safe_float(stats.get("Volatility (Ann.) [%]")),
-        "cagr_pct": _safe_float(stats.get("CAGR [%]")),
-        "buy_hold_return_pct": _safe_float(stats.get("Buy & Hold Return [%]")),
-        "alpha_pct": _safe_float(stats.get("Alpha [%]")),
-        "beta": _safe_float(stats.get("Beta")),
-        "sharpe_ratio": _safe_float(stats.get("Sharpe Ratio")),
-        "sortino_ratio": _safe_float(stats.get("Sortino Ratio")),
-        "calmar_ratio": _safe_float(stats.get("Calmar Ratio")),
-        "max_drawdown_pct": _safe_float(stats.get("Max. Drawdown [%]")),
-        "avg_drawdown_pct": _safe_float(stats.get("Avg. Drawdown [%]")),
-        "max_drawdown_duration_days": _duration_to_days(stats.get("Max. Drawdown Duration")),
-        "avg_drawdown_duration_days": _duration_to_days(stats.get("Avg. Drawdown Duration")),
-        "equity_final": _safe_float(stats.get("Equity Final [$]")),
-        "equity_peak": _safe_float(stats.get("Equity Peak [$]")),
-        "commissions_total": _safe_float(stats.get("Commissions [$]")),
-        "exposure_time_pct": _safe_float(stats.get("Exposure Time [%]")),
+        "return_pct": _sf(stats.get("Return [%]")),
+        "return_ann_pct": _sf(stats.get("Return (Ann.) [%]")),
+        "volatility_ann_pct": _sf(stats.get("Volatility (Ann.) [%]")),
+        "cagr_pct": _sf(stats.get("CAGR [%]")),
+        "buy_hold_return_pct": _sf(stats.get("Buy & Hold Return [%]")),
+        "alpha_pct": _sf(stats.get("Alpha [%]")),
+        "beta": _sf(stats.get("Beta")),
+        "sharpe_ratio": _sf(stats.get("Sharpe Ratio")),
+        "sortino_ratio": _sf(stats.get("Sortino Ratio")),
+        "calmar_ratio": _sf(stats.get("Calmar Ratio")),
+        "max_drawdown_pct": _sf(stats.get("Max. Drawdown [%]")),
+        "avg_drawdown_pct": _sf(stats.get("Avg. Drawdown [%]")),
+        "max_drawdown_duration_days": _dd(stats.get("Max. Drawdown Duration")),
+        "avg_drawdown_duration_days": _dd(stats.get("Avg. Drawdown Duration")),
+        "equity_final": _sf(stats.get("Equity Final [$]")),
+        "equity_peak": _sf(stats.get("Equity Peak [$]")),
+        "commissions_total": _sf(stats.get("Commissions [$]")),
+        "exposure_time_pct": _sf(stats.get("Exposure Time [%]")),
         "total_trades": int(stats.get("# Trades", 0)),
-        "win_rate_pct": _safe_float(stats.get("Win Rate [%]")),
-        "best_trade_pct": _safe_float(stats.get("Best Trade [%]")),
-        "worst_trade_pct": _safe_float(stats.get("Worst Trade [%]")),
-        "avg_trade_pct": _safe_float(stats.get("Avg. Trade [%]")),
-        "max_trade_duration_days": _duration_to_days(stats.get("Max. Trade Duration")),
-        "avg_trade_duration_days": _duration_to_days(stats.get("Avg. Trade Duration")),
-        "profit_factor": _safe_float(stats.get("Profit Factor")),
-        "expectancy_pct": _safe_float(stats.get("Expectancy [%]")),
-        "sqn": _safe_float(stats.get("SQN")),
-        "kelly_criterion": _safe_float(stats.get("Kelly Criterion")),
+        "win_rate_pct": _sf(stats.get("Win Rate [%]")),
+        "best_trade_pct": _sf(stats.get("Best Trade [%]")),
+        "worst_trade_pct": _sf(stats.get("Worst Trade [%]")),
+        "avg_trade_pct": _sf(stats.get("Avg. Trade [%]")),
+        "max_trade_duration_days": _dd(stats.get("Max. Trade Duration")),
+        "avg_trade_duration_days": _dd(stats.get("Avg. Trade Duration")),
+        "profit_factor": _sf(stats.get("Profit Factor")),
+        "expectancy_pct": _sf(stats.get("Expectancy [%]")),
+        "sqn": _sf(stats.get("SQN")),
+        "kelly_criterion": _sf(stats.get("Kelly Criterion")),
     }
 
-    # --- Strategy parameters ---
+    # --- Strategy name and parameters ---
+    strategy_name = "Unknown"
     parameters = {}
     strategy = stats.get("_strategy")
     if strategy is not None:
         strategy_class = strategy if isinstance(strategy, type) else strategy.__class__
-        for attr in dir(strategy_class):
+        strategy_name = strategy_class.__name__
+        for attr in vars(strategy_class):
             if attr.startswith("_"):
                 continue
             val = getattr(strategy_class, attr, None)
@@ -759,7 +775,7 @@ def _serialize_stats(stats, name, symbol, description, tags):
             if isinstance(val, (int, float, str, bool)):
                 parameters[attr] = val
 
-    # --- Equity curve (downsampled for storage) ---
+    # --- Equity curve ---
     equity_curve = []
     ec = stats.get("_equity_curve")
     if ec is not None and hasattr(ec, "index"):
@@ -767,16 +783,16 @@ def _serialize_stats(stats, name, symbol, description, tags):
         step = max(1, len(equity_series) // 500)
         for i in range(0, len(equity_series), step):
             equity_curve.append({
-                "date": equity_series.index[i].isoformat(),
+                "date": equity_series.index[i].strftime("%Y-%m-%d"),
                 "equity": round(float(equity_series.iloc[i]), 2),
             })
-        if equity_curve and equity_curve[-1]["date"] != equity_series.index[-1].isoformat():
+        if equity_curve and equity_curve[-1]["date"] != equity_series.index[-1].strftime("%Y-%m-%d"):
             equity_curve.append({
-                "date": equity_series.index[-1].isoformat(),
+                "date": equity_series.index[-1].strftime("%Y-%m-%d"),
                 "equity": round(float(equity_series.iloc[-1]), 2),
             })
 
-    # --- Drawdown curve ---
+    # --- Drawdown curve (computed from equity peak) ---
     drawdown_curve = []
     if ec is not None and hasattr(ec, "index"):
         equity_series = ec["Equity"]
@@ -784,10 +800,13 @@ def _serialize_stats(stats, name, symbol, description, tags):
         drawdown = ((equity_series - running_max) / running_max) * 100
         step = max(1, len(drawdown) // 500)
         for i in range(0, len(drawdown), step):
-            drawdown_curve.append({
-                "date": drawdown.index[i].isoformat(),
-                "drawdown_pct": round(float(drawdown.iloc[i]), 4),
-            })
+            dd_val = round(float(drawdown.iloc[i]), 4)
+            if dd_val < -0.01:
+                drawdown_curve.append({
+                    "date": drawdown.index[i].strftime("%Y-%m-%d"),
+                    "equity": round(float(equity_series.iloc[i]), 2),
+                    "drawdown_pct": dd_val,
+                })
 
     # --- Trade log ---
     trades_list = []
@@ -795,19 +814,24 @@ def _serialize_stats(stats, name, symbol, description, tags):
     if trades is not None and hasattr(trades, "iterrows"):
         for i, trade in trades.iterrows():
             size = trade.get("Size", 0)
+            entry_time = trade.get("EntryTime")
+            exit_time = trade.get("ExitTime")
+            duration = 0
+            if hasattr(entry_time, "strftime") and hasattr(exit_time, "strftime"):
+                duration = (exit_time - entry_time).days
             trades_list.append({
                 "trade_number": i + 1,
                 "side": "LONG" if size > 0 else "SHORT",
                 "size": abs(int(size)) if size else 0,
                 "entry_bar": int(trade.get("EntryBar", 0)),
                 "exit_bar": int(trade.get("ExitBar", 0)),
-                "entry_date": _safe_isoformat(trade.get("EntryTime")),
-                "exit_date": _safe_isoformat(trade.get("ExitTime")),
-                "entry_price": _safe_float(trade.get("EntryPrice")),
-                "exit_price": _safe_float(trade.get("ExitPrice")),
-                "pnl_abs": _safe_float(trade.get("PnL")),
-                "pnl_pct": round(float(trade.get("ReturnPct", 0)) * 100, 4),
-                "duration_days": _duration_to_days(trade.get("Duration")),
+                "entry_date": entry_time.strftime("%Y-%m-%d") if hasattr(entry_time, "strftime") else str(entry_time),
+                "exit_date": exit_time.strftime("%Y-%m-%d") if hasattr(exit_time, "strftime") else str(exit_time),
+                "entry_price": _sf(trade.get("EntryPrice")),
+                "exit_price": _sf(trade.get("ExitPrice")),
+                "pnl_abs": _sf(trade.get("PnL")),
+                "pnl_pct": _sf(trade.get("ReturnPct")),  # already in % form
+                "duration_days": duration,
             })
 
     # --- Monthly returns ---
@@ -816,33 +840,31 @@ def _serialize_stats(stats, name, symbol, description, tags):
         try:
             equity_series = ec["Equity"]
             monthly = equity_series.resample("ME").last()
-            pct = monthly.pct_change() * 100
+            pct = monthly.pct_change().dropna() * 100
             for date, ret in pct.items():
-                if ret is not None and not (isinstance(ret, float) and math.isnan(ret)):
-                    monthly_returns.append({
-                        "year": date.year,
-                        "month": date.month,
-                        "return_pct": round(float(ret), 4),
-                    })
+                monthly_returns.append({
+                    "year": date.year,
+                    "month": date.month,
+                    "return_pct": _sf(ret),
+                })
         except Exception:
             pass
 
-    # --- Strategy class name ---
-    strategy_name = "Unknown"
-    if strategy is not None:
-        strategy_class = strategy if isinstance(strategy, type) else strategy.__class__
-        strategy_name = strategy_class.__name__
+    # --- Dates as YYYY-MM-DD ---
+    start_val = stats.get("Start")
+    end_val = stats.get("End")
+    start_date = start_val.strftime("%Y-%m-%d") if hasattr(start_val, "strftime") else str(start_val)
+    end_date = end_val.strftime("%Y-%m-%d") if hasattr(end_val, "strftime") else str(end_val)
 
-    # --- Assemble payload ---
     return {
         "name": name[:200],
         "symbol": symbol[:50],
         "description": description[:2000],
         "tags": tags[:20],
         "strategy_name": strategy_name,
-        "start_date": _safe_isoformat(stats.get("Start")),
-        "end_date": _safe_isoformat(stats.get("End")),
-        "starting_capital": _safe_float(equity_curve[0]["equity"] if equity_curve else None),
+        "start_date": start_date,
+        "end_date": end_date,
+        "starting_capital": round(float(equity_curve[0]["equity"]), 2) if equity_curve else 0,
         "parameters": parameters,
         "summary": summary,
         "equity_curve": equity_curve,
@@ -850,4 +872,3 @@ def _serialize_stats(stats, name, symbol, description, tags):
         "trades": trades_list,
         "monthly_returns": monthly_returns,
     }
-
