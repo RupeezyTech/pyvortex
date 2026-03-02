@@ -2,6 +2,7 @@ import requests
 import csv
 import datetime
 import logging
+import math
 from enum import Enum
 import inspect
 import wrapt
@@ -238,7 +239,7 @@ class VortexAPI:
         Depricating Soon. Use SSO Login instead. Login using password and totp directly
         
         Documentation:
-            https://vortex.rupeezy.in/docs/authentication/
+            https://vortex.rupeezy.in/docs/latest/authentication/
 
         Args:
             client_code(str): Client Code of the account
@@ -264,7 +265,7 @@ class VortexAPI:
         Download list of all available instruments and their details across all exchanges
 
         Documentation:
-            https://vortex.rupeezy.in/docs/historical/#instrument-list
+            https://vortex.rupeezy.in/docs/latest/historical/#instrument-list
 
         Returns:
             dict: CSV Array of all instruments. The first row contains headers
@@ -283,7 +284,7 @@ class VortexAPI:
         Place an order for a specific security
 
         Documentation:
-            https://vortex.rupeezy.in/docs/order/#placing-an-order
+            https://vortex.rupeezy.in/docs/latest/order/#placing-an-order
 
         Args:
             exchange (Constants.ExchangeTypes): Possible values: [NSE_EQ, NSE_FO, BSE_EQ, BSE_FO, NSE_CD or MCX_FO]
@@ -343,7 +344,7 @@ class VortexAPI:
         Method to modify an order using the Vortex API.
 
         Documentation:
-            https://vortex.rupeezy.in/docs/order/#modifying-an-order
+            https://vortex.rupeezy.in/docs/latest/order/#modifying-an-order
 
         Args:
             exchange (Constants.ExchangeTypes): Possible values: [NSE_EQ, NSE_FO, BSE_EQ, BSE_FO, NSE_CD or MCX_FO]
@@ -386,7 +387,7 @@ class VortexAPI:
         Method to cancel an order using the Vortex API.
 
         Documentation:
-            https://vortex.rupeezy.in/docs/order/#cancel-an-order
+            https://vortex.rupeezy.in/docs/latest/order/#cancel-an-order
 
         Args:
             exchange (Constants.ExchangeTypes): Possible values: [NSE_EQ, NSE_FO, BSE_EQ, BSE_FO, NSE_CD or MCX_FO]
@@ -404,7 +405,7 @@ class VortexAPI:
         Method to get all orders.
 
         Documentation:
-            https://vortex.rupeezy.in/docs/order/#fetching-order-book
+            https://vortex.rupeezy.in/docs/latest/order/#fetching-order-book
 
         Args:
             limit (int): Limit is the number of orders to be fetched. 
@@ -421,7 +422,7 @@ class VortexAPI:
         Method to get the order history of a particular order
 
         Documentation:
-            https://vortex.rupeezy.in/docs/order/
+            https://vortex.rupeezy.in/docs/latest/order/
 
         Args:
             order_id (str): Order id for which history has to be fetched
@@ -437,7 +438,7 @@ class VortexAPI:
         Method to get the position book using the Vortex API.
 
         Documentation:
-            https://vortex.rupeezy.in/docs/positions/#fetch-all-positions
+            https://vortex.rupeezy.in/docs/latest/positions/#fetch-all-positions
 
         Returns:
             dict: Dictionary containing the response data from the API.
@@ -450,7 +451,7 @@ class VortexAPI:
         Method to get the holdings of the user using the Vortex API.
 
         Documentation:    
-            https://vortex.rupeezy.in/docs/holdings/
+            https://vortex.rupeezy.in/docs/latest/holdings/
 
         Returns:
             dict: Dictionary containing the response data from the API.
@@ -463,7 +464,7 @@ class VortexAPI:
         Method to get today's trades of the user using the Vortex API.
 
         Documentation:    
-            https://vortex.rupeezy.in/docs/positions/#get-trades
+            https://vortex.rupeezy.in/docs/latest/positions/#get-trades
 
         Returns:
             dict: Dictionary containing the response data from the API.
@@ -476,7 +477,7 @@ class VortexAPI:
         Method to get the funds of the user using the Vortex API.
 
         Documentation:    
-            https://vortex.rupeezy.in/docs/user/#available-funds
+            https://vortex.rupeezy.in/docs/latest/user/#available-funds
 
         Returns:
             dict: Dictionary containing the response data from the API.
@@ -490,7 +491,7 @@ class VortexAPI:
         Get the margin required for placing an order for a specific security.
 
         Documentation:    
-            https://vortex.rupeezy.in/docs/margin/#order-margin
+            https://vortex.rupeezy.in/docs/latest/margin/#order-margin
 
         Args:
             exchange (Constants.ExchangeTypes): Possible values: [NSE_EQ, NSE_FO, BSE_EQ, BSE_FO, NSE_CD or MCX_FO]
@@ -532,12 +533,25 @@ class VortexAPI:
         }
         return self._make_api_request("POST", endpoint, data=data)
     
+    def brokerage_plan(self)-> dict: 
+        """
+        Get brokerage plan details of the user.
+
+        Documentation:    
+            https://vortex.rupeezy.in/docs/latest/user/
+
+        Returns:
+            dict: JSON response containing the details of the brokerage plan of the user
+        """
+        endpoint = "/user/profile/brokerage"
+        return self._make_api_request("GET", endpoint, data=None,params=None)
+    
     def quotes(self, instruments: list, mode: Constants.QuoteModes)-> dict: 
         """
         Gets quotes of up to 1000 instruments at a time. 
 
         Documentation:    
-            https://vortex.rupeezy.in/docs/historical/#fetch-price-quotes
+            https://vortex.rupeezy.in/docs/latest/historical/#fetch-price-quotes
 
         Args:
             instrument(list): List of instruments. The items should be like ( "NSE_EQ-22", "NSE_FO-1234")
@@ -556,7 +570,7 @@ class VortexAPI:
         Gets historical candle data of a particular instrument. 
 
         Documentation:    
-            https://vortex.rupeezy.in/docs/historical/#fetch-historical-candle-data
+            https://vortex.rupeezy.in/docs/latest/historical/#fetch-historical-candle-data
 
         Args:
             exchange (Constants.ExchangeTypes): Possible values: [NSE_EQ, NSE_FO, BSE_EQ, BSE_FO, NSE_CD or MCX_FO]
@@ -586,7 +600,7 @@ class VortexAPI:
         Returns the login URL for the Vortex API.
 
         Documentation:
-            https://vortex.rupeezy.in/docs/authentication/
+            https://vortex.rupeezy.in/docs/latest/authentication/
 
         Returns:
             str: The login URL for the Vortex API.
@@ -599,7 +613,7 @@ class VortexAPI:
         Exchange the auth code received from the login URL for an access token.
 
         Documentation:
-            https://vortex.rupeezy.in/docs/authentication/
+            https://vortex.rupeezy.in/docs/latest/authentication/
 
         Args:
             auth_code (str): The authorization code received from the login URL.
@@ -623,20 +637,217 @@ class VortexAPI:
         sha.update(text.encode('utf-8'))
         return sha.hexdigest()
 
-    def _setup_client_code(self, login_object: dict) -> bool: 
-        """ 
+    def _setup_client_code(self, login_object: dict) -> bool:
+        """
         Sets up access token after login
 
-        Args: 
+        Args:
             login_object(dict): Login object received
 
-        Returns: 
+        Returns:
             (bool): Whether successful or not
         """
 
-        if (('data' in login_object ) and login_object["data"] != None and login_object["data"]["access_token"] != None): 
+        if (('data' in login_object ) and login_object["data"] != None and login_object["data"]["access_token"] != None):
             self.access_token = login_object["data"]["access_token"]
             return True
-        
+
         return False
-    
+
+    def save_backtest_result(self, stats, name: str, symbol: str = "", description: str = "", tags: list = None) -> dict:
+        """
+        Save backtest results to Rupeezy for viewing on the developer portal.
+
+        Args:
+            stats: The Stats object returned by Backtest.run() or Backtest.optimize()
+                   from the backtesting.py library.
+            name (str): A label for this backtest run (e.g. "SMA Crossover v2").
+            symbol (str, optional): Primary instrument symbol.
+            description (str, optional): Notes about this run.
+            tags (list[str], optional): Tags for filtering (e.g. ["intraday", "nifty"]).
+
+        Returns:
+            dict: { "status": "success", "backtest_id": "bt_abc123", "url": "https://..." }
+        """
+        payload = _serialize_stats(stats, name, symbol, description, tags or [])
+        endpoint = "/strategies/backtests"
+
+        return self._make_api_request("POST", endpoint, data=payload)
+
+# ─── Backtest serialization helpers (module-level) ───────────────────────────
+
+def _safe_float(val):
+    """Convert a value to float, returning None for NaN/None/invalid."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return round(f, 4)
+    except (ValueError, TypeError):
+        return None
+
+
+def _safe_isoformat(val):
+    """Convert a datetime-like value to ISO format string."""
+    if val is None:
+        return None
+    try:
+        return val.isoformat()
+    except AttributeError:
+        return str(val)
+
+
+def _duration_to_days(val):
+    """Convert a timedelta-like value to integer days."""
+    if val is None:
+        return None
+    try:
+        return val.days
+    except AttributeError:
+        return None
+
+
+def _serialize_stats(stats, name, symbol, description, tags):
+    """Convert backtesting.py Stats object to a JSON-serializable dict."""
+
+    # --- Summary metrics ---
+    summary = {
+        "return_pct": _safe_float(stats.get("Return [%]")),
+        "return_ann_pct": _safe_float(stats.get("Return (Ann.) [%]")),
+        "volatility_ann_pct": _safe_float(stats.get("Volatility (Ann.) [%]")),
+        "cagr_pct": _safe_float(stats.get("CAGR [%]")),
+        "buy_hold_return_pct": _safe_float(stats.get("Buy & Hold Return [%]")),
+        "alpha_pct": _safe_float(stats.get("Alpha [%]")),
+        "beta": _safe_float(stats.get("Beta")),
+        "sharpe_ratio": _safe_float(stats.get("Sharpe Ratio")),
+        "sortino_ratio": _safe_float(stats.get("Sortino Ratio")),
+        "calmar_ratio": _safe_float(stats.get("Calmar Ratio")),
+        "max_drawdown_pct": _safe_float(stats.get("Max. Drawdown [%]")),
+        "avg_drawdown_pct": _safe_float(stats.get("Avg. Drawdown [%]")),
+        "max_drawdown_duration_days": _duration_to_days(stats.get("Max. Drawdown Duration")),
+        "avg_drawdown_duration_days": _duration_to_days(stats.get("Avg. Drawdown Duration")),
+        "equity_final": _safe_float(stats.get("Equity Final [$]")),
+        "equity_peak": _safe_float(stats.get("Equity Peak [$]")),
+        "commissions_total": _safe_float(stats.get("Commissions [$]")),
+        "exposure_time_pct": _safe_float(stats.get("Exposure Time [%]")),
+        "total_trades": int(stats.get("# Trades", 0)),
+        "win_rate_pct": _safe_float(stats.get("Win Rate [%]")),
+        "best_trade_pct": _safe_float(stats.get("Best Trade [%]")),
+        "worst_trade_pct": _safe_float(stats.get("Worst Trade [%]")),
+        "avg_trade_pct": _safe_float(stats.get("Avg. Trade [%]")),
+        "max_trade_duration_days": _duration_to_days(stats.get("Max. Trade Duration")),
+        "avg_trade_duration_days": _duration_to_days(stats.get("Avg. Trade Duration")),
+        "profit_factor": _safe_float(stats.get("Profit Factor")),
+        "expectancy_pct": _safe_float(stats.get("Expectancy [%]")),
+        "sqn": _safe_float(stats.get("SQN")),
+        "kelly_criterion": _safe_float(stats.get("Kelly Criterion")),
+    }
+
+    # --- Strategy parameters ---
+    parameters = {}
+    strategy = stats.get("_strategy")
+    if strategy is not None:
+        strategy_class = strategy if isinstance(strategy, type) else strategy.__class__
+        for attr in dir(strategy_class):
+            if attr.startswith("_"):
+                continue
+            val = getattr(strategy_class, attr, None)
+            if callable(val):
+                continue
+            if isinstance(val, (int, float, str, bool)):
+                parameters[attr] = val
+
+    # --- Equity curve (downsampled for storage) ---
+    equity_curve = []
+    ec = stats.get("_equity_curve")
+    if ec is not None and hasattr(ec, "index"):
+        equity_series = ec["Equity"]
+        step = max(1, len(equity_series) // 500)
+        for i in range(0, len(equity_series), step):
+            equity_curve.append({
+                "date": equity_series.index[i].isoformat(),
+                "equity": round(float(equity_series.iloc[i]), 2),
+            })
+        if equity_curve and equity_curve[-1]["date"] != equity_series.index[-1].isoformat():
+            equity_curve.append({
+                "date": equity_series.index[-1].isoformat(),
+                "equity": round(float(equity_series.iloc[-1]), 2),
+            })
+
+    # --- Drawdown curve ---
+    drawdown_curve = []
+    if ec is not None and hasattr(ec, "index"):
+        equity_series = ec["Equity"]
+        running_max = equity_series.cummax()
+        drawdown = ((equity_series - running_max) / running_max) * 100
+        step = max(1, len(drawdown) // 500)
+        for i in range(0, len(drawdown), step):
+            drawdown_curve.append({
+                "date": drawdown.index[i].isoformat(),
+                "drawdown_pct": round(float(drawdown.iloc[i]), 4),
+            })
+
+    # --- Trade log ---
+    trades_list = []
+    trades = stats.get("_trades")
+    if trades is not None and hasattr(trades, "iterrows"):
+        for i, trade in trades.iterrows():
+            size = trade.get("Size", 0)
+            trades_list.append({
+                "trade_number": i + 1,
+                "side": "LONG" if size > 0 else "SHORT",
+                "size": abs(int(size)) if size else 0,
+                "entry_bar": int(trade.get("EntryBar", 0)),
+                "exit_bar": int(trade.get("ExitBar", 0)),
+                "entry_date": _safe_isoformat(trade.get("EntryTime")),
+                "exit_date": _safe_isoformat(trade.get("ExitTime")),
+                "entry_price": _safe_float(trade.get("EntryPrice")),
+                "exit_price": _safe_float(trade.get("ExitPrice")),
+                "pnl_abs": _safe_float(trade.get("PnL")),
+                "pnl_pct": round(float(trade.get("ReturnPct", 0)) * 100, 4),
+                "duration_days": _duration_to_days(trade.get("Duration")),
+            })
+
+    # --- Monthly returns ---
+    monthly_returns = []
+    if ec is not None and hasattr(ec, "index"):
+        try:
+            equity_series = ec["Equity"]
+            monthly = equity_series.resample("ME").last()
+            pct = monthly.pct_change() * 100
+            for date, ret in pct.items():
+                if ret is not None and not (isinstance(ret, float) and math.isnan(ret)):
+                    monthly_returns.append({
+                        "year": date.year,
+                        "month": date.month,
+                        "return_pct": round(float(ret), 4),
+                    })
+        except Exception:
+            pass
+
+    # --- Strategy class name ---
+    strategy_name = "Unknown"
+    if strategy is not None:
+        strategy_class = strategy if isinstance(strategy, type) else strategy.__class__
+        strategy_name = strategy_class.__name__
+
+    # --- Assemble payload ---
+    return {
+        "name": name[:200],
+        "symbol": symbol[:50],
+        "description": description[:2000],
+        "tags": tags[:20],
+        "strategy_name": strategy_name,
+        "start_date": _safe_isoformat(stats.get("Start")),
+        "end_date": _safe_isoformat(stats.get("End")),
+        "starting_capital": _safe_float(equity_curve[0]["equity"] if equity_curve else None),
+        "parameters": parameters,
+        "summary": summary,
+        "equity_curve": equity_curve,
+        "drawdown_curve": drawdown_curve,
+        "trades": trades_list,
+        "monthly_returns": monthly_returns,
+    }
+
