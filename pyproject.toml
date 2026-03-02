@@ -1,3 +1,41 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[project]
+name = "vortex_api"
+version = "2.0.6"
+description = "Vortex APIs to place orders in Rupeezy application"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Astha Credit & Securities Pvt Ltd.", email = "tech@rupeezy.in" }
+]
+requires-python = ">=3.8"
+
+dependencies = [
+    "requests>=2.25.1",
+    "wrapt>=1.15.0",
+    "six>=1.11.0",
+    "pyOpenSSL>=17.5.0",
+    "python-dateutil>=2.6.1",
+    "autobahn[twisted]==19.11.2",
+    "service_identity>=18.1.0"
+]
+
+classifiers = [
+    "Intended Audience :: Developers",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Natural Language :: English",
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+    "Topic :: Office/Business :: Financial :: Investment",
+    "Topic :: Software Development :: Libraries :: Python Modules"
+]
+
+[project.urls]
+Homepage = "https://vortex.rupeezy.in"
+Repository = "https://github.com/RupeezyTech/pyvortex"
+
+[tool.setuptools.packages.find]
+include = ["vortex_api"]
