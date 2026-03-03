@@ -674,6 +674,81 @@ class VortexAPI:
 
         return self._make_api_request("POST", endpoint, data=payload)
 
+    def save_optimization_result(
+        self,
+        stats,
+        heatmap,
+        name: str,
+        symbol: str = "",
+        description: str = "",
+        maximize="Sharpe Ratio",
+        param_ranges: dict = None,
+    ) -> dict:
+        """
+        Save optimization results to Rupeezy for viewing on the developer portal.
+
+        Takes the output of backtesting.py's Backtest.optimize() and uploads
+        both the parameter heatmap and the best result's full backtest data.
+
+        Args:
+            stats: The Stats object returned by Backtest.optimize() for the best
+                   parameter combination.
+            heatmap: The pandas Series with MultiIndex returned by
+                     Backtest.optimize(return_heatmap=True). Contains the objective
+                     metric value for every parameter combination tested.
+            name (str): A label for this optimization run (e.g. "SMA Grid Search").
+            symbol (str, optional): Primary instrument symbol (e.g. "NIFTY").
+            description (str, optional): Notes about this optimization run.
+            maximize: The metric that was optimized. Should match the `maximize`
+                      argument passed to Backtest.optimize(). Can be a string
+                      metric name (e.g. "Sharpe Ratio") or a callable.
+                      Defaults to "Sharpe Ratio".
+            param_ranges (dict, optional): Explicit parameter range definitions.
+                Keys are parameter names, values are range() objects or lists.
+                Example: {"sma_fast": range(5, 51, 5), "sma_slow": range(20, 201, 10)}
+                If not provided, ranges are inferred from the heatmap index.
+
+        Returns:
+            dict: {"status": "success", "optimization_id": "opt_xxx", "backtest_id": "bt_xxx"}
+
+        Example::
+
+            stats, heatmap = bt.optimize(
+                sma_fast=range(5, 51, 5),
+                sma_slow=range(20, 201, 10),
+                maximize='Sharpe Ratio',
+                return_heatmap=True,
+            )
+            client.save_optimization_result(
+                stats=stats,
+                heatmap=heatmap,
+                name="SMA Crossover Grid Search",
+                symbol="NIFTY",
+                maximize='Sharpe Ratio',
+                param_ranges={"sma_fast": range(5, 51, 5), "sma_slow": range(20, 201, 10)},
+            )
+        """
+        is_maximize = True
+        objective_metric = maximize
+
+        if isinstance(maximize, bool):
+            is_maximize = maximize
+            objective_metric = "Sharpe Ratio"
+
+        payload = _serialize_optimization(
+            stats=stats,
+            heatmap=heatmap,
+            name=name,
+            symbol=symbol,
+            description=description,
+            objective_metric=objective_metric,
+            maximize=is_maximize,
+            param_ranges=param_ranges,
+        )
+
+        endpoint = "/strategies/optimizations"
+        return self._make_api_request("POST", endpoint, data=payload)
+
 # ─── Backtest serialization helpers (module-level) ───────────────────────────
 
 def _safe_float(val):
@@ -871,4 +946,150 @@ def _serialize_stats(stats, name, symbol, description, tags):
         "drawdown_curve": drawdown_curve,
         "trades": trades_list,
         "monthly_returns": monthly_returns,
+    }
+
+
+# ─── Optimization serialization helpers (module-level) ───────────────────────
+
+# Maps backtesting.py metric names → backend snake_case field names.
+_METRIC_NAME_MAP = {
+    "Sharpe Ratio":           "sharpe_ratio",
+    "Sortino Ratio":          "sortino_ratio",
+    "Calmar Ratio":           "calmar_ratio",
+    "Return [%]":             "return_pct",
+    "Return (Ann.) [%]":      "return_ann_pct",
+    "Equity Final [$]":       "equity_final",
+    "SQN":                    "sqn",
+    "Max. Drawdown [%]":      "max_drawdown_pct",
+    "Avg. Drawdown [%]":      "avg_drawdown_pct",
+    "Win Rate [%]":           "win_rate_pct",
+    "Profit Factor":          "profit_factor",
+    "Expectancy [%]":         "expectancy_pct",
+    "# Trades":               "total_trades",
+    "Exposure Time [%]":      "exposure_time_pct",
+    "Buy & Hold Return [%]":  "buy_hold_return_pct",
+    "CAGR [%]":               "cagr_pct",
+    "Volatility (Ann.) [%]":  "volatility_ann_pct",
+    "Kelly Criterion":        "kelly_criterion",
+    "Best Trade [%]":         "best_trade_pct",
+    "Worst Trade [%]":        "worst_trade_pct",
+    "Avg. Trade [%]":         "avg_trade_pct",
+}
+
+
+def _infer_range_def(sorted_values):
+    """
+    Given a sorted list of unique float values, try to infer start/stop/step.
+    If evenly spaced → {"start", "stop", "step"}.
+    Otherwise → {"values": [...]}.
+    """
+    if len(sorted_values) < 2:
+        return {"values": sorted_values}
+
+    step = sorted_values[1] - sorted_values[0]
+    is_uniform = all(
+        abs((sorted_values[i] - sorted_values[i - 1]) - step) < 1e-9
+        for i in range(2, len(sorted_values))
+    )
+
+    if is_uniform and step > 0:
+        return {
+            "start": sorted_values[0],
+            "stop": sorted_values[-1] + step,
+            "step": step,
+        }
+    return {"values": sorted_values}
+
+
+def _serialize_optimization(stats, heatmap, name, symbol, description,
+                            objective_metric, maximize, param_ranges):
+    """
+    Serialize backtesting.py optimize() output into the backend's
+    OptimizationSaveRequest payload.
+    """
+    # --- Map the objective metric name to backend format ---
+    if isinstance(objective_metric, str):
+        backend_metric = _METRIC_NAME_MAP.get(objective_metric, objective_metric)
+    else:
+        # Callable (custom optimization function)
+        backend_metric = "custom"
+
+    # --- Build parameter_defs ---
+    parameter_defs = {}
+    if param_ranges is not None:
+        for param_name, rng in param_ranges.items():
+            if isinstance(rng, range):
+                parameter_defs[param_name] = {
+                    "start": float(rng.start),
+                    "stop": float(rng.stop),
+                    "step": float(rng.step),
+                }
+            elif hasattr(rng, "__iter__"):
+                parameter_defs[param_name] = {
+                    "values": [float(v) for v in rng],
+                }
+            else:
+                parameter_defs[param_name] = {"values": [float(rng)]}
+    elif heatmap is not None and hasattr(heatmap, "index"):
+        index = heatmap.index
+        if hasattr(index, "levels"):
+            # MultiIndex (2+ params)
+            for level_num, level_name in enumerate(index.names):
+                values = sorted(set(float(v) for v in index.get_level_values(level_num)))
+                parameter_defs[level_name] = _infer_range_def(values)
+        else:
+            # Plain Index (1 param)
+            level_name = index.name or "param"
+            values = sorted(set(float(v) for v in index))
+            parameter_defs[level_name] = _infer_range_def(values)
+
+    # --- Build results array from heatmap ---
+    results = []
+    if heatmap is not None and hasattr(heatmap, "index"):
+        index = heatmap.index
+        if hasattr(index, "levels"):
+            for key, metric_val in heatmap.items():
+                params = {}
+                for i, level_name in enumerate(index.names):
+                    params[level_name] = float(key[i])
+                results.append({
+                    "parameters": params,
+                    "metric_value": _safe_float(metric_val),
+                    "return_pct": None,
+                    "sharpe_ratio": None,
+                    "max_drawdown_pct": None,
+                    "total_trades": None,
+                })
+        else:
+            level_name = index.name or "param"
+            for key, metric_val in heatmap.items():
+                results.append({
+                    "parameters": {level_name: float(key)},
+                    "metric_value": _safe_float(metric_val),
+                    "return_pct": None,
+                    "sharpe_ratio": None,
+                    "max_drawdown_pct": None,
+                    "total_trades": None,
+                })
+
+    # --- Serialize the best result using existing _serialize_stats ---
+    best_result = _serialize_stats(stats, name, symbol, description, [])
+
+    # --- Extract strategy name from stats ---
+    strategy_name = "Unknown"
+    strategy = stats.get("_strategy")
+    if strategy is not None:
+        strategy_class = strategy if isinstance(strategy, type) else strategy.__class__
+        strategy_name = strategy_class.__name__
+
+    return {
+        "name": name[:200],
+        "symbol": symbol[:50],
+        "strategy_name": strategy_name,
+        "description": description[:2000],
+        "objective_metric": backend_metric,
+        "maximize": maximize,
+        "parameter_defs": parameter_defs,
+        "results": results,
+        "best_result": best_result,
     }
