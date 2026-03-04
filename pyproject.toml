@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vortex_api"
-version = "2.1.0"
+version = "2.1.1"
 description = "Vortex APIs to place orders in Rupeezy application"
 readme = "README.md"
 license = { text = "MIT" }
@@ -38,4 +38,4 @@ Homepage = "https://vortex.rupeezy.in"
 Repository = "https://github.com/RupeezyTech/pyvortex"
 
 [tool.setuptools.packages.find]
-include = ["vortex_api"]
+include = ["vortex_api", "vortex_api.*"]

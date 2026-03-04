@@ -2,7 +2,6 @@ import requests
 import csv
 import datetime
 import logging
-import math
 from enum import Enum
 import inspect
 import wrapt
@@ -658,9 +657,13 @@ class VortexAPI:
         """
         Save backtest results to Rupeezy for viewing on the developer portal.
 
+        Supports multiple backtesting libraries (auto-detected from the result type):
+        - **backtesting.py**: pass the stats object from Backtest.run()
+        - **vectorbt**: pass a vbt.Portfolio object
+        - **backtrader**: pass the strategy from cerebro.run() (i.e. results[0])
+
         Args:
-            stats: The Stats object returned by Backtest.run() or Backtest.optimize()
-                   from the backtesting.py library.
+            stats: The result object from any supported backtesting library.
             name (str): A label for this backtest run (e.g. "SMA Crossover v2").
             symbol (str, optional): Primary instrument symbol.
             description (str, optional): Notes about this run.
@@ -669,7 +672,8 @@ class VortexAPI:
         Returns:
             dict: { "status": "success", "backtest_id": "bt_abc123", "url": "https://..." }
         """
-        payload = _serialize_stats(stats, name, symbol, description, tags or [])
+        from .backtest import serialize_stats
+        payload = serialize_stats(stats, name, symbol, description, tags or [])
         endpoint = "/strategies/backtests"
 
         return self._make_api_request("POST", endpoint, data=payload)
@@ -687,15 +691,15 @@ class VortexAPI:
         """
         Save optimization results to Rupeezy for viewing on the developer portal.
 
-        Takes the output of backtesting.py's Backtest.optimize() and uploads
-        both the parameter heatmap and the best result's full backtest data.
+        Supports multiple backtesting libraries (auto-detected from the result type):
+        - **backtesting.py**: pass stats + heatmap from bt.optimize(return_heatmap=True)
+        - **vectorbt**: pass Portfolio + metric Series from multi-param run
+        - **backtrader**: pass results list from cerebro.run() after optstrategy()
 
         Args:
-            stats: The Stats object returned by Backtest.optimize() for the best
-                   parameter combination.
-            heatmap: The pandas Series with MultiIndex returned by
-                     Backtest.optimize(return_heatmap=True). Contains the objective
-                     metric value for every parameter combination tested.
+            stats: The result object from any supported backtesting library.
+            heatmap: The heatmap/metric Series (backtesting.py/vectorbt) or
+                     metric extraction callable (backtrader).
             name (str): A label for this optimization run (e.g. "SMA Grid Search").
             symbol (str, optional): Primary instrument symbol (e.g. "NIFTY").
             description (str, optional): Notes about this optimization run.
@@ -735,8 +739,9 @@ class VortexAPI:
             is_maximize = maximize
             objective_metric = "Sharpe Ratio"
 
-        payload = _serialize_optimization(
-            stats=stats,
+        from .backtest import serialize_optimization
+        payload = serialize_optimization(
+            result=stats,
             heatmap=heatmap,
             name=name,
             symbol=symbol,
@@ -747,351 +752,3 @@ class VortexAPI:
         )
         endpoint = "/strategies/optimizations"
         return self._make_api_request("POST", endpoint, data=payload)
-
-# ─── Backtest serialization helpers (module-level) ───────────────────────────
-
-def _safe_float(val):
-    """Convert a value to float, returning None for NaN/None/invalid."""
-    if val is None:
-        return None
-    try:
-        f = float(val)
-        if math.isnan(f) or math.isinf(f):
-            return None
-        return round(f, 4)
-    except (ValueError, TypeError):
-        return None
-
-
-def _safe_isoformat(val):
-    """Convert a datetime-like value to ISO format string."""
-    if val is None:
-        return None
-    try:
-        return val.isoformat()
-    except AttributeError:
-        return str(val)
-
-
-def _duration_to_days(val):
-    """Convert a timedelta-like value to integer days."""
-    if val is None:
-        return None
-    try:
-        return val.days
-    except AttributeError:
-        return None
-
-
-def _serialize_stats(stats, name, symbol, description, tags):
-    def _sf(val):
-        if val is None:
-            return 0.0
-        try:
-            f = float(val)
-            return 0.0 if (math.isnan(f) or math.isinf(f)) else round(f, 4)
-        except (ValueError, TypeError):
-            return 0.0
-
-    def _dd(val):
-        if val is None:
-            return 0
-        try:
-            return val.days
-        except AttributeError:
-            return 0
-
-    summary = {
-        "return_pct": _sf(stats.get("Return [%]")),
-        "return_ann_pct": _sf(stats.get("Return (Ann.) [%]")),
-        "volatility_ann_pct": _sf(stats.get("Volatility (Ann.) [%]")),
-        "cagr_pct": _sf(stats.get("CAGR [%]")),
-        "buy_hold_return_pct": _sf(stats.get("Buy & Hold Return [%]")),
-        "alpha_pct": _sf(stats.get("Alpha [%]")),
-        "beta": _sf(stats.get("Beta")),
-        "sharpe_ratio": _sf(stats.get("Sharpe Ratio")),
-        "sortino_ratio": _sf(stats.get("Sortino Ratio")),
-        "calmar_ratio": _sf(stats.get("Calmar Ratio")),
-        "max_drawdown_pct": _sf(stats.get("Max. Drawdown [%]")),
-        "avg_drawdown_pct": _sf(stats.get("Avg. Drawdown [%]")),
-        "max_drawdown_duration_days": _dd(stats.get("Max. Drawdown Duration")),
-        "avg_drawdown_duration_days": _dd(stats.get("Avg. Drawdown Duration")),
-        "equity_final": _sf(stats.get("Equity Final [$]")),
-        "equity_peak": _sf(stats.get("Equity Peak [$]")),
-        "commissions_total": _sf(stats.get("Commissions [$]")),
-        "exposure_time_pct": _sf(stats.get("Exposure Time [%]")),
-        "total_trades": int(stats.get("# Trades", 0)),
-        "win_rate_pct": _sf(stats.get("Win Rate [%]")),
-        "best_trade_pct": _sf(stats.get("Best Trade [%]")),
-        "worst_trade_pct": _sf(stats.get("Worst Trade [%]")),
-        "avg_trade_pct": _sf(stats.get("Avg. Trade [%]")),
-        "max_trade_duration_days": _dd(stats.get("Max. Trade Duration")),
-        "avg_trade_duration_days": _dd(stats.get("Avg. Trade Duration")),
-        "profit_factor": _sf(stats.get("Profit Factor")),
-        "expectancy_pct": _sf(stats.get("Expectancy [%]")),
-        "sqn": _sf(stats.get("SQN")),
-        "kelly_criterion": _sf(stats.get("Kelly Criterion")),
-    }
-
-    # --- Strategy name and parameters ---
-    strategy_name = "Unknown"
-    parameters = {}
-    strategy = stats.get("_strategy")
-    if strategy is not None:
-        strategy_class = strategy if isinstance(strategy, type) else strategy.__class__
-        strategy_name = strategy_class.__name__
-        for attr in vars(strategy_class):
-            if attr.startswith("_"):
-                continue
-            val = getattr(strategy_class, attr, None)
-            if callable(val):
-                continue
-            if isinstance(val, (int, float, str, bool)):
-                parameters[attr] = val
-
-    # --- Equity curve ---
-    equity_curve = []
-    ec = stats.get("_equity_curve")
-    if ec is not None and hasattr(ec, "index"):
-        equity_series = ec["Equity"]
-        step = max(1, len(equity_series) // 500)
-        for i in range(0, len(equity_series), step):
-            equity_curve.append({
-                "date": equity_series.index[i].strftime("%Y-%m-%d"),
-                "equity": round(float(equity_series.iloc[i]), 2),
-            })
-        if equity_curve and equity_curve[-1]["date"] != equity_series.index[-1].strftime("%Y-%m-%d"):
-            equity_curve.append({
-                "date": equity_series.index[-1].strftime("%Y-%m-%d"),
-                "equity": round(float(equity_series.iloc[-1]), 2),
-            })
-
-    # --- Drawdown curve (computed from equity peak) ---
-    drawdown_curve = []
-    if ec is not None and hasattr(ec, "index"):
-        equity_series = ec["Equity"]
-        running_max = equity_series.cummax()
-        drawdown = ((equity_series - running_max) / running_max) * 100
-        step = max(1, len(drawdown) // 500)
-        for i in range(0, len(drawdown), step):
-            dd_val = round(float(drawdown.iloc[i]), 4)
-            if dd_val < -0.01:
-                drawdown_curve.append({
-                    "date": drawdown.index[i].strftime("%Y-%m-%d"),
-                    "equity": round(float(equity_series.iloc[i]), 2),
-                    "drawdown_pct": dd_val,
-                })
-
-    # --- Trade log ---
-    trades_list = []
-    trades = stats.get("_trades")
-    if trades is not None and hasattr(trades, "iterrows"):
-        for i, trade in trades.iterrows():
-            size = trade.get("Size", 0)
-            entry_time = trade.get("EntryTime")
-            exit_time = trade.get("ExitTime")
-            duration = 0
-            if hasattr(entry_time, "strftime") and hasattr(exit_time, "strftime"):
-                duration = (exit_time - entry_time).days
-            trades_list.append({
-                "trade_number": i + 1,
-                "side": "LONG" if size > 0 else "SHORT",
-                "size": abs(int(size)) if size else 0,
-                "entry_bar": int(trade.get("EntryBar", 0)),
-                "exit_bar": int(trade.get("ExitBar", 0)),
-                "entry_date": entry_time.strftime("%Y-%m-%d") if hasattr(entry_time, "strftime") else str(entry_time),
-                "exit_date": exit_time.strftime("%Y-%m-%d") if hasattr(exit_time, "strftime") else str(exit_time),
-                "entry_price": _sf(trade.get("EntryPrice")),
-                "exit_price": _sf(trade.get("ExitPrice")),
-                "pnl_abs": _sf(trade.get("PnL")),
-                "pnl_pct": _sf(trade.get("ReturnPct")),  # already in % form
-                "duration_days": duration,
-            })
-
-    # --- Monthly returns ---
-    monthly_returns = []
-    if ec is not None and hasattr(ec, "index"):
-        try:
-            equity_series = ec["Equity"]
-            monthly = equity_series.resample("ME").last()
-            pct = monthly.pct_change().dropna() * 100
-            for date, ret in pct.items():
-                monthly_returns.append({
-                    "year": date.year,
-                    "month": date.month,
-                    "return_pct": _sf(ret),
-                })
-        except Exception:
-            pass
-
-    # --- Dates as YYYY-MM-DD ---
-    start_val = stats.get("Start")
-    end_val = stats.get("End")
-    start_date = start_val.strftime("%Y-%m-%d") if hasattr(start_val, "strftime") else str(start_val)
-    end_date = end_val.strftime("%Y-%m-%d") if hasattr(end_val, "strftime") else str(end_val)
-
-    return {
-        "name": name[:200],
-        "symbol": symbol[:50],
-        "description": description[:2000],
-        "tags": tags[:20],
-        "strategy_name": strategy_name,
-        "start_date": start_date,
-        "end_date": end_date,
-        "starting_capital": round(float(equity_curve[0]["equity"]), 2) if equity_curve else 0,
-        "parameters": parameters,
-        "summary": summary,
-        "equity_curve": equity_curve,
-        "drawdown_curve": drawdown_curve,
-        "trades": trades_list,
-        "monthly_returns": monthly_returns,
-    }
-
-
-# ─── Optimization serialization helpers (module-level) ───────────────────────
-
-# Maps backtesting.py metric names → backend snake_case field names.
-_METRIC_NAME_MAP = {
-    "Sharpe Ratio":           "sharpe_ratio",
-    "Sortino Ratio":          "sortino_ratio",
-    "Calmar Ratio":           "calmar_ratio",
-    "Return [%]":             "return_pct",
-    "Return (Ann.) [%]":      "return_ann_pct",
-    "Equity Final [$]":       "equity_final",
-    "SQN":                    "sqn",
-    "Max. Drawdown [%]":      "max_drawdown_pct",
-    "Avg. Drawdown [%]":      "avg_drawdown_pct",
-    "Win Rate [%]":           "win_rate_pct",
-    "Profit Factor":          "profit_factor",
-    "Expectancy [%]":         "expectancy_pct",
-    "# Trades":               "total_trades",
-    "Exposure Time [%]":      "exposure_time_pct",
-    "Buy & Hold Return [%]":  "buy_hold_return_pct",
-    "CAGR [%]":               "cagr_pct",
-    "Volatility (Ann.) [%]":  "volatility_ann_pct",
-    "Kelly Criterion":        "kelly_criterion",
-    "Best Trade [%]":         "best_trade_pct",
-    "Worst Trade [%]":        "worst_trade_pct",
-    "Avg. Trade [%]":         "avg_trade_pct",
-}
-
-
-def _infer_range_def(sorted_values):
-    """
-    Given a sorted list of unique float values, try to infer start/stop/step.
-    If evenly spaced → {"start", "stop", "step"}.
-    Otherwise → {"values": [...]}.
-    """
-    if len(sorted_values) < 2:
-        return {"values": sorted_values}
-
-    step = sorted_values[1] - sorted_values[0]
-    is_uniform = all(
-        abs((sorted_values[i] - sorted_values[i - 1]) - step) < 1e-9
-        for i in range(2, len(sorted_values))
-    )
-
-    if is_uniform and step > 0:
-        return {
-            "start": sorted_values[0],
-            "stop": sorted_values[-1] + step,
-            "step": step,
-        }
-    return {"values": sorted_values}
-
-
-def _serialize_optimization(stats, heatmap, name, symbol, description,
-                            objective_metric, maximize, param_ranges):
-    """
-    Serialize backtesting.py optimize() output into the backend's
-    OptimizationSaveRequest payload.
-    """
-    # --- Map the objective metric name to backend format ---
-    if isinstance(objective_metric, str):
-        backend_metric = _METRIC_NAME_MAP.get(objective_metric, objective_metric)
-    else:
-        # Callable (custom optimization function)
-        backend_metric = "custom"
-
-    # --- Build parameter_defs ---
-    parameter_defs = {}
-    if param_ranges is not None:
-        for param_name, rng in param_ranges.items():
-            if isinstance(rng, range):
-                parameter_defs[param_name] = {
-                    "start": float(rng.start),
-                    "stop": float(rng.stop),
-                    "step": float(rng.step),
-                }
-            elif hasattr(rng, "__iter__"):
-                parameter_defs[param_name] = {
-                    "values": [float(v) for v in rng],
-                }
-            else:
-                parameter_defs[param_name] = {"values": [float(rng)]}
-    elif heatmap is not None and hasattr(heatmap, "index"):
-        index = heatmap.index
-        if hasattr(index, "levels"):
-            # MultiIndex (2+ params)
-            for level_num, level_name in enumerate(index.names):
-                values = sorted(set(float(v) for v in index.get_level_values(level_num)))
-                parameter_defs[level_name] = _infer_range_def(values)
-        else:
-            # Plain Index (1 param)
-            level_name = index.name or "param"
-            values = sorted(set(float(v) for v in index))
-            parameter_defs[level_name] = _infer_range_def(values)
-
-    # --- Build results array from heatmap ---
-    results = []
-    if heatmap is not None and hasattr(heatmap, "index"):
-        index = heatmap.index
-        # Map metric_value into the matching named column too.
-        _METRIC_FIELDS = {"return_pct", "sharpe_ratio", "max_drawdown_pct", "total_trades"}
-
-        def _build_entry(params, metric_val):
-            val = _safe_float(metric_val)
-            entry = {
-                "parameters": params,
-                "metric_value": val,
-                "return_pct": None,
-                "sharpe_ratio": None,
-                "max_drawdown_pct": None,
-                "total_trades": None,
-            }
-            if backend_metric in _METRIC_FIELDS and val is not None:
-                entry[backend_metric] = int(val) if backend_metric == "total_trades" else val
-            return entry
-
-        if hasattr(index, "levels"):
-            for key, metric_val in heatmap.items():
-                params = {}
-                for i, level_name in enumerate(index.names):
-                    params[level_name] = float(key[i])
-                results.append(_build_entry(params, metric_val))
-        else:
-            level_name = index.name or "param"
-            for key, metric_val in heatmap.items():
-                results.append(_build_entry({level_name: float(key)}, metric_val))
-
-    # --- Serialize the best result using existing _serialize_stats ---
-    best_result = _serialize_stats(stats, name, symbol, description, [])
-
-    # --- Extract strategy name from stats ---
-    strategy_name = "Unknown"
-    strategy = stats.get("_strategy")
-    if strategy is not None:
-        strategy_class = strategy if isinstance(strategy, type) else strategy.__class__
-        strategy_name = strategy_class.__name__
-
-    return {
-        "name": name[:200],
-        "symbol": symbol[:50],
-        "strategy_name": strategy_name,
-        "description": description[:2000],
-        "objective_metric": backend_metric,
-        "maximize": maximize,
-        "parameter_defs": parameter_defs,
-        "results": results,
-        "best_result": best_result,
-    }
