@@ -745,7 +745,6 @@ class VortexAPI:
             maximize=is_maximize,
             param_ranges=param_ranges,
         )
-
         endpoint = "/strategies/optimizations"
         return self._make_api_request("POST", endpoint, data=payload)
 
@@ -1047,30 +1046,33 @@ def _serialize_optimization(stats, heatmap, name, symbol, description,
     results = []
     if heatmap is not None and hasattr(heatmap, "index"):
         index = heatmap.index
+        # Map metric_value into the matching named column too.
+        _METRIC_FIELDS = {"return_pct", "sharpe_ratio", "max_drawdown_pct", "total_trades"}
+
+        def _build_entry(params, metric_val):
+            val = _safe_float(metric_val)
+            entry = {
+                "parameters": params,
+                "metric_value": val,
+                "return_pct": None,
+                "sharpe_ratio": None,
+                "max_drawdown_pct": None,
+                "total_trades": None,
+            }
+            if backend_metric in _METRIC_FIELDS and val is not None:
+                entry[backend_metric] = int(val) if backend_metric == "total_trades" else val
+            return entry
+
         if hasattr(index, "levels"):
             for key, metric_val in heatmap.items():
                 params = {}
                 for i, level_name in enumerate(index.names):
                     params[level_name] = float(key[i])
-                results.append({
-                    "parameters": params,
-                    "metric_value": _safe_float(metric_val),
-                    "return_pct": None,
-                    "sharpe_ratio": None,
-                    "max_drawdown_pct": None,
-                    "total_trades": None,
-                })
+                results.append(_build_entry(params, metric_val))
         else:
             level_name = index.name or "param"
             for key, metric_val in heatmap.items():
-                results.append({
-                    "parameters": {level_name: float(key)},
-                    "metric_value": _safe_float(metric_val),
-                    "return_pct": None,
-                    "sharpe_ratio": None,
-                    "max_drawdown_pct": None,
-                    "total_trades": None,
-                })
+                results.append(_build_entry({level_name: float(key)}, metric_val))
 
     # --- Serialize the best result using existing _serialize_stats ---
     best_result = _serialize_stats(stats, name, symbol, description, [])
