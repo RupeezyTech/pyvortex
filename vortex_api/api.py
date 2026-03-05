@@ -18,8 +18,11 @@ class Constants:
         NSE_FO = "NSE_FO"
         BSE_FO = "BSE_FO"
         NSE_EQUITY = "NSE_EQ"
+        NSE_EQ = "NSE_EQ"
         BSE_EQUITY = "BSE_EQ"
+        BSE_EQ = "NSE_EQ"
         NSE_CURRENCY = "NSE_CD"
+        NSE_CD = "NSE_CD"
         MCX = "MCX_FO"
 
         def __str__(self):
