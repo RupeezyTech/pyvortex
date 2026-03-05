@@ -14,7 +14,14 @@ Usage from api.py:
 
 def _is_backtestingpy(result):
     """Check if result is a backtesting.py stats object (pd.Series with _strategy key)."""
-    return hasattr(result, "get") and result.get("_strategy") is not None
+    if not hasattr(result, "get"):
+        return False
+    # Primary: backtesting.py always sets _strategy
+    if result.get("_strategy") is not None:
+        return True
+    # Fallback: manually constructed Series with backtesting.py-style keys
+    _BT_KEYS = {"Sharpe Ratio", "# Trades", "Return [%]", "Win Rate [%]"}
+    return hasattr(result, "index") and len(_BT_KEYS & set(result.index)) >= 3
 
 
 def _is_vectorbt(result):
