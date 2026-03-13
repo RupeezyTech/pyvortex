@@ -261,8 +261,12 @@ class VortexFeed:
                 access_token = os.getenv("VORTEX_ACCESS_TOKEN")
             else:
                 raise ValueError("Access token must be provided either as an argument or through the VORTEX_ACCESS_TOKEN environment variable.")
-            
-        self.socket_url = websocket_endpoint+"?auth_token="+access_token
+        
+        if os.getenv("VORTEX_FEED_BASE_URL") != None:
+            self.socket_url = os.getenv("VORTEX_FEED_BASE_URL") + "?auth_token=" + access_token
+        else:
+            self.socket_url = websocket_endpoint+"?auth_token="+access_token
+
         self.access_token = access_token
         self.socket_token = self.__getSocketToken__(self.access_token)
 

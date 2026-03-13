@@ -176,7 +176,12 @@ class VortexAPI:
                 raise ValueError("Application ID must be provided either as an argument or through the VORTEX_APPLICATION_ID environment variable.")
         self.api_key = api_key
         self.application_id = application_id
-        self.base_url = base_url
+
+        if os.getenv("VORTEX_BASE_URL") != None:
+            self.base_url = os.getenv("VORTEX_BASE_URL")
+        else:
+            self.base_url = base_url
+            
         if os.getenv("VORTEX_ACCESS_TOKEN") != None:
             self.access_token = os.getenv("VORTEX_ACCESS_TOKEN")
         else:
