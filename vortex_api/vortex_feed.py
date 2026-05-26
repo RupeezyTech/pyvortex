@@ -6,6 +6,7 @@ import struct
 import logging
 import threading
 import os
+import warnings
 from twisted.internet import reactor, ssl
 from twisted.python import log as twisted_log
 from twisted.internet.protocol import ReconnectingClientFactory
@@ -15,6 +16,16 @@ from autobahn.twisted.websocket import WebSocketClientProtocol, \
 from .__version__ import __version__, __name__
 
 log = logging.getLogger(__name__)
+
+
+def _warn_token_exchange_deprecated(method_name: str) -> None:
+    """Emit a FutureWarning when callers pass ``token``/``exchange`` instead of ``ticker``."""
+    warnings.warn(
+        f"Passing 'exchange' and 'token' to {method_name}() is deprecated and will be "
+        "removed in a future release. Use 'ticker' instead (e.g. ticker=\"NSE:RELIANCE\").",
+        FutureWarning,
+        stacklevel=3,
+    )
 
 class ClientProtocol(WebSocketClientProtocol): 
     """
@@ -240,7 +251,23 @@ class VortexFeed:
     _message_unsubscribe = "unsubscribe"
 
     def __init__(self, access_token: str=None, websocket_endpoint="wss://wire.rupeezy.in/ws",reconnect=True, reconnect_max_tries=RECONNECT_MAX_TRIES, reconnect_max_delay=RECONNECT_MAX_DELAY,
-                 connect_timeout=CONNECT_TIMEOUT, debug = False) -> None:
+                 connect_timeout=CONNECT_TIMEOUT, debug = False, instruments=None) -> None:
+        """
+        Args:
+            instruments: Optional ``InstrumentManager``. If you don't pass one,
+                ``VortexFeed`` creates its own automatically — every tick
+                parsed from the binary feed will be tagged with a ``ticker``
+                field (e.g. ``"NSE:RELIANCE"``) alongside the existing
+                ``exchange``/``token`` fields. Pass an existing manager (e.g.
+                ``client.instruments``) if you want to share one cache across
+                the REST client and the feed.
+
+                ``connect()`` blocks until the instrument master is loaded so
+                every tick — including the very first one — is guaranteed to
+                carry a ``ticker`` field. The load is cached on disk and only
+                hits the network once per IST trading day, so this overhead is
+                near-zero on every connect after the first of the day.
+        """
         self._maximum_reconnect_max_tries = self.RECONNECT_MAX_TRIES
         self._minimum_reconnect_max_delay = 0 
         if reconnect == False: 
@@ -285,6 +312,24 @@ class VortexFeed:
         self.on_reconnect = None
         self.on_noreconnect = None
         self.on_order_update = None
+        if instruments is None:
+            # Default: every feed gets its own InstrumentManager so ticker
+            # enrichment "just works" without any wiring from the user. The
+            # underlying disk cache is process-wide, so multiple managers in
+            # the same process share the same master.csv on disk.
+            try:
+                from .instruments import InstrumentManager
+                instruments = InstrumentManager()
+            except Exception as exc:
+                # Never let an instruments-import problem break the feed.
+                log.debug("Could not auto-construct InstrumentManager: %s", exc)
+                instruments = None
+        self.instruments = instruments
+        # Flat dict of active subscriptions, keyed by the canonical identifier
+        # (the ``ticker`` string, or ``"<exchange>:<token>"`` for the legacy form).
+        # Each value is a dict carrying the original args plus the mode so that
+        # ``resubscribe()`` can replay each subscription exactly as the user
+        # originally requested it.
         self.subscribed_tokens = {}
         pass
 
@@ -315,6 +360,12 @@ class VortexFeed:
         Establish a websocket connection.
         - `disable_ssl_verification` disables building ssl context
         """
+        # Load the instrument master *before* opening the websocket so the
+        # very first tick is already eligible for ticker enrichment. The
+        # InstrumentManager caches on disk (1× per IST day across processes),
+        # so this is near-instant on every connect after the day's first.
+        self._preload_instruments()
+
         # Init WebSocket client factory
         self._create_connection(self.socket_url,
                                 useragent=self._user_agent())
@@ -375,50 +426,112 @@ class VortexFeed:
         if self.factory:
             self.factory.stopTrying()
 
-    def subscribe(self, exchange: str,token: int,mode: str)->bool:
+    def subscribe(self, exchange: str = None, token: int = None, mode: str = None, ticker: str = None) -> bool:
         """
-        Subscribe to a list of instrument_tokens.
-        - `instrument_tokens` is list of instrument instrument_tokens to subscribe
+        Subscribe to live updates for an instrument.
+
+        Pass either ``ticker`` (e.g. ``"NSE:RELIANCE"``) or both ``exchange`` and
+        ``token``. The ``(exchange, token)`` form is supported for backward
+        compatibility but is deprecated — prefer ``ticker``.
+
+        Args:
+            exchange (str, optional): Exchange code (e.g. ``"NSE_EQ"``).
+                Required together with ``token`` when ``ticker`` is not supplied.
+            token (int, optional): Security token. Required together with
+                ``exchange`` when ``ticker`` is not supplied.
+            mode (str): Quote mode — ``"ltp"``, ``"ohlcv"``, or ``"full"``.
+            ticker (str, optional): Instrument ticker in the form
+                ``<EXCHANGE>:<SYMBOL>`` (e.g. ``"NSE:RELIANCE"``).
+
+        Raises:
+            ValueError: If neither ``ticker`` nor (``exchange`` and ``token``) is provided.
+            TypeError: If ``mode`` is missing.
         """
+        if ticker is None and (exchange is None or token is None):
+            raise ValueError("Either 'ticker' or both 'exchange' and 'token' must be provided")
+        if mode is None:
+            raise TypeError("missing required argument: 'mode'")
+
+        if ticker is None:
+            _warn_token_exchange_deprecated("subscribe")
+
+        payload = {"message_type": self._message_subscribe, "mode": mode}
+        if ticker is not None:
+            payload["ticker"] = ticker
+            sub_key = ticker
+            record = {"ticker": ticker, "mode": mode}
+        else:
+            payload["exchange"] = exchange
+            payload["token"] = token
+            sub_key = f"{exchange}:{token}"
+            record = {"exchange": exchange, "token": token, "mode": mode}
+
         try:
-            self.ws.sendMessage(six.b(json.dumps({"message_type": self._message_subscribe, "exchange": exchange,"token": token,"mode": mode})))     
-
-            try: 
-                self.subscribed_tokens[exchange][token] = mode
-            except KeyError: 
-                self.subscribed_tokens[exchange] = {}
-                self.subscribed_tokens[exchange][token] = mode
-
+            self.ws.sendMessage(six.b(json.dumps(payload)))
+            self.subscribed_tokens[sub_key] = record
             return True
         except Exception as e:
             self._close(reason="Error while subscribe: {}".format(str(e)))
             raise
 
-    def unsubscribe(self, exchange: str,token: int)->bool:
+    def unsubscribe(self, exchange: str = None, token: int = None, ticker: str = None) -> bool:
         """
-        Unsubscribe the given list of instrument_tokens.
-        - `instrument_tokens` is list of instrument_tokens to unsubscribe.
+        Unsubscribe from live updates for an instrument.
+
+        Pass either ``ticker`` or both ``exchange`` and ``token`` — must match
+        the form originally used in ``subscribe()`` for the local subscription
+        record to be cleared (the server unsubscribes either way).
+
+        Args:
+            exchange (str, optional): Exchange code. Required together with
+                ``token`` when ``ticker`` is not supplied.
+            token (int, optional): Security token. Required together with
+                ``exchange`` when ``ticker`` is not supplied.
+            ticker (str, optional): Instrument ticker in the form
+                ``<EXCHANGE>:<SYMBOL>`` (e.g. ``"NSE:RELIANCE"``).
+
+        Raises:
+            ValueError: If neither ``ticker`` nor (``exchange`` and ``token``) is provided.
         """
+        if ticker is None and (exchange is None or token is None):
+            raise ValueError("Either 'ticker' or both 'exchange' and 'token' must be provided")
+
+        if ticker is None:
+            _warn_token_exchange_deprecated("unsubscribe")
+
+        payload = {"message_type": self._message_unsubscribe}
+        if ticker is not None:
+            payload["ticker"] = ticker
+            sub_key = ticker
+        else:
+            payload["exchange"] = exchange
+            payload["token"] = token
+            sub_key = f"{exchange}:{token}"
+
         try:
-            self.ws.sendMessage(six.b(json.dumps({"message_type": self._message_unsubscribe, "exchange": exchange,"token": token})))            
-
-            try: 
-                del(self.subscribed_tokens[exchange][token])
-            except KeyError: 
-                pass 
-
+            self.ws.sendMessage(six.b(json.dumps(payload)))
+            self.subscribed_tokens.pop(sub_key, None)
             return True
         except Exception as e:
             self._close(reason="Error while unsubscribe: {}".format(str(e)))
             raise
 
     def resubscribe(self):
-        """Resubscribe to all current subscribed tokens."""
-        modes = {}
+        """Resubscribe to all currently-tracked instruments.
 
-        for exchange in self.subscribed_tokens: 
-            for token in self.subscribed_tokens[exchange]: 
-                self.subscribe(exchange=exchange, token=token,mode=self.subscribed_tokens[exchange][token])
+        Each subscription is replayed in the exact form (ticker or
+        exchange/token) the user originally used.
+        """
+        # Snapshot first because subscribe() mutates the dict.
+        for record in list(self.subscribed_tokens.values()):
+            if "ticker" in record:
+                self.subscribe(ticker=record["ticker"], mode=record["mode"])
+            else:
+                self.subscribe(
+                    exchange=record["exchange"],
+                    token=record["token"],
+                    mode=record["mode"],
+                )
 
     def _on_connect(self, ws, response):
         self.ws = ws
@@ -486,6 +599,52 @@ class VortexFeed:
         if self.on_order_update and data.get("type") and data.get("data"):
             self.on_order_update(self, data)
 
+    def _preload_instruments(self) -> None:
+        """Load the InstrumentManager synchronously before the WS connects.
+
+        This is what guarantees that ticker enrichment is available on the
+        very first tick. The InstrumentManager has an in-memory + disk cache,
+        so this call returns instantly on every connect after the day's first.
+
+        Failure modes (network down, read-only filesystem, etc.) are logged
+        but do not block the websocket — the feed will simply emit ticks
+        with ``exchange``/``token`` only until a future ``load()`` succeeds.
+        """
+        mgr = self.instruments
+        if mgr is None or mgr.is_loaded:
+            return
+        try:
+            mgr.load()
+        except Exception as exc:
+            log.warning(
+                "Instrument preload failed; tick ticker enrichment will be "
+                "skipped until a subsequent successful load. Error: %s",
+                exc,
+            )
+
+    def _enrich_with_ticker(self, record: dict) -> dict:
+        """Add a ``ticker`` field to a tick record.
+
+        The binary tick wire format carries only ``exchange`` + ``token`` — the
+        server never sends a ticker string. This method resolves the ticker
+        client-side via the attached ``InstrumentManager``, so users who
+        subscribed by ticker get tick callbacks tagged with the same ticker
+        without any wire-format change.
+
+        Non-blocking and silent on failure — a missing instrument or unloaded
+        manager just leaves the record alone (no exception, no lazy-load).
+        """
+        mgr = self.instruments
+        if mgr is None:
+            return record
+        try:
+            ticker = mgr.get_ticker_or_none(record["exchange"], record["token"])
+        except Exception:
+            return record
+        if ticker:
+            record["ticker"] = ticker
+        return record
+
     def _parse_binary(self, bin):
         """Parse binary data to a (list of) ticks structure."""
         packets = self._split_packets(bin)  # split data to individual ticks packet
@@ -496,17 +655,17 @@ class VortexFeed:
                 format_string = "<10sid"
                 exchange, token, last_trade_price = struct.unpack(format_string, packet)
                 exchange = exchange.decode("utf-8").rstrip('\x00')
-                data.append({
-                    "exchange" : exchange, 
+                data.append(self._enrich_with_ticker({
+                    "exchange" : exchange,
                     "token": token,
                     "last_trade_price": last_trade_price
-                })
-            elif len(packet) == 62: 
+                }))
+            elif len(packet) == 62:
                 format_string = "<10sididdddi"
                 exchange, token, last_trade_price, last_trade_time, open_price, high_price, low_price, close_price, volume = struct.unpack(format_string, packet)
                 exchange = exchange.decode("utf-8").rstrip('\x00')
-                data.append({
-                    "exchange" : exchange, 
+                data.append(self._enrich_with_ticker({
+                    "exchange" : exchange,
                     "token": token,
                     "last_trade_price": last_trade_price,
                     "last_trade_time": last_trade_time,
@@ -515,13 +674,13 @@ class VortexFeed:
                     "low_price": low_price,
                     "close_price": close_price,
                     "volume": volume
-                })
+                }))
             elif len(packet) == 266:
                 format_string = "<10sididdddiiidqqidiidiidiidiidiidiidiidiidiidiiii"
                 unpacked_data = struct.unpack(format_string, packet)
                 exchange = unpacked_data[0].decode("utf-8").rstrip('\x00')
-                data.append({
-                    "exchange" : exchange, 
+                data.append(self._enrich_with_ticker({
+                    "exchange" : exchange,
                     "token": unpacked_data[1],
                     "last_trade_price": unpacked_data[2],
                     "last_trade_time": unpacked_data[3],
@@ -583,7 +742,7 @@ class VortexFeed:
                     }, 
                     "dpr_high": unpacked_data[45],
                     "dpr_low": unpacked_data[46],
-                })
+                }))
         return data
 
     def _unpack_int(self, bin, start, end, byte_format="H"):

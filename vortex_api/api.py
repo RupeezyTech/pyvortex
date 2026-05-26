@@ -2,11 +2,22 @@ import requests
 import csv
 import datetime
 import logging
+import warnings
 from enum import Enum
 import inspect
 import wrapt
 import hashlib
 import os
+
+
+def _warn_token_exchange_deprecated(method_name: str) -> None:
+    """Emit a FutureWarning when callers pass ``token``/``exchange`` instead of ``ticker``."""
+    warnings.warn(
+        f"Passing 'exchange' and 'token' to {method_name}() is deprecated and will be "
+        "removed in a future release. Use 'ticker' instead (e.g. ticker=\"NSE:RELIANCE\").",
+        FutureWarning,
+        stacklevel=3,
+    )
 class Constants: 
     """
     Constants used in the API
@@ -111,27 +122,31 @@ class Constants:
 def validate_inputs(func):
     @wrapt.decorator
     def wrapper(wrapped, instance, args, kwargs):
-        # Get the function signature
         sig = inspect.signature(wrapped)
-        # Validate the input arguments
-        for param_name, param in sig.parameters.items():
-            if param_name == 'self':
-                continue
+        # Build ordered list of non-self params for positional index mapping.
+        # wrapt strips 'self' from args, so index 0 in args = first non-self param.
+        params = [(name, p) for name, p in sig.parameters.items() if name != 'self']
+
+        for idx, (param_name, param) in enumerate(params):
             param_type = param.annotation
             if param_type is inspect.Parameter.empty:
                 continue
-            if param_type is not inspect.Parameter.empty:
-                if kwargs.get(param_name) != None: 
-                    value = kwargs.get(param_name)
-                else: 
-                    value = args[list(sig.parameters.values()).index(param)]
-                # value = args[list(sig.parameters.values()).index(param)] if param.kind == inspect.Parameter.POSITIONAL_ONLY else kwargs.get(param_name)
-                if isinstance(param_type, Enum) and value not in param_type.__members__.values():
-                    raise ValueError(f'{param.name} must be one of {list(param_type.__members__.values())}')
-                if not isinstance(value, param_type):
-                    raise TypeError(f'{param_name} must be of type {param_type.__name__}')
-        sig.parameters.values()
-        # Call the wrapped function
+
+            # Resolve value: check kwargs first, then positional args
+            if param_name in kwargs:
+                value = kwargs[param_name]
+            elif idx < len(args):
+                value = args[idx]
+            elif param.default is not inspect.Parameter.empty:
+                continue  # has a default, skip validation
+            else:
+                raise TypeError(f"missing required argument: '{param_name}'")
+
+            if isinstance(param_type, Enum) and value not in param_type.__members__.values():
+                raise ValueError(f'{param_name} must be one of {list(param_type.__members__.values())}')
+            if not isinstance(value, param_type):
+                raise TypeError(f'{param_name} must be of type {param_type.__name__}')
+
         return wrapped(*args, **kwargs)
 
     return wrapper(func)
@@ -190,6 +205,22 @@ class VortexAPI:
         self.enable_logging = enable_logging
         if self.enable_logging:
             logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+        self._instruments = None  # lazily constructed InstrumentManager
+
+    @property
+    def instruments(self):
+        """Lazy ``InstrumentManager`` for this client.
+
+        The first access constructs the manager but does **not** download
+        ``master.csv``; the download happens on the first lookup (or on an
+        explicit ``.load()`` call) and is cached in memory and on disk so
+        subsequent script runs hit the network at most once per IST trading day.
+        """
+        if self._instruments is None:
+            from vortex_api.instruments import InstrumentManager
+            self._instruments = InstrumentManager()
+        return self._instruments
     
     def _make_api_request(self, method: str, endpoint: str, data: dict = None, params=None) -> dict:
         """
@@ -216,7 +247,16 @@ class VortexAPI:
         response = requests.request(method, url, headers=headers, json=data,params=params)
         if self.enable_logging:
             logging.debug(f"Response received from {url}  , body: {response.json()}")
-        response.raise_for_status()
+        if not response.ok:
+            try:
+                error_body = response.json()
+                error_message = error_body.get("message", response.text)
+            except Exception:
+                error_message = response.text
+            raise requests.exceptions.HTTPError(
+                f"{response.status_code} {response.reason}: {error_message}",
+                response=response,
+            )
         return response.json()
     
     def _make_unauth_request(self, method: str, endpoint: str, data: dict = None, params: dict = None) -> dict:
@@ -285,8 +325,8 @@ class VortexAPI:
             my_list = list(cr)
             return my_list
     
-    def place_order(self,exchange: Constants.ExchangeTypes, token: int, transaction_type: Constants.TransactionSides, product: Constants.ProductTypes, variety: Constants.VarietyTypes, 
-                quantity: int, price: float, trigger_price: float, disclosed_quantity: int, validity: Constants.ValidityTypes) -> dict:
+    def place_order(self, exchange: Constants.ExchangeTypes = None, token: int = None, transaction_type: Constants.TransactionSides = None, product: Constants.ProductTypes = None, variety: Constants.VarietyTypes = None,
+                quantity: int = None, price: float = None, trigger_price: float = None, disclosed_quantity: int = None, validity: Constants.ValidityTypes = None, ticker: str = None) -> dict:
         """
         Place an order for a specific security
 
@@ -294,44 +334,62 @@ class VortexAPI:
             https://vortex.rupeezy.in/docs/latest/order/#placing-an-order
 
         Args:
-            exchange (Constants.ExchangeTypes): Possible values: [NSE_EQ, NSE_FO, BSE_EQ, BSE_FO, NSE_CD or MCX_FO]
-            token (int): Security token of the scrip. It can be found in the scripmaster file
+            exchange (Constants.ExchangeTypes, optional): Possible values: [NSE_EQ, NSE_FO, BSE_EQ, BSE_FO, NSE_CD or MCX_FO].
+                Required together with ``token`` when ``ticker`` is not supplied.
+            token (int, optional): Security token of the scrip. It can be found in the scripmaster file.
+                Required together with ``exchange`` when ``ticker`` is not supplied.
             transaction_type (Constants.TransactionSides): Possible values: [BUY, SELL]
             product (Constants.ProductTypes): Possible values: [INTRADAY, DELIVERY, MTF]. MTF product can only be used in NSE_EQ exchange.
-            variety (Constants.VarietyTypes): Possible values: [RL, RL-MKT, SL, SL-MKT]. RL means regular orders, SL means Stop Loss order. 
+            variety (Constants.VarietyTypes): Possible values: [RL, RL-MKT, SL, SL-MKT]. RL means regular orders, SL means Stop Loss order.
                         MKT means that the trade will happen at market price
-            quantity (int): For exchange NSE_FO, if you want to trade in 2 lots and lot size is 50, you should pass 100. 
-                            In all other exchanges, you should pass just the number of lots. For example, in MCX_FO, 
+            quantity (int): For exchange NSE_FO, if you want to trade in 2 lots and lot size is 50, you should pass 100.
+                            In all other exchanges, you should pass just the number of lots. For example, in MCX_FO,
                             if you want to trade 5 lots, you should pass just 5.
-            price (float): Price should be an integer multiple of Tick Size. For example, IDEA's tick size is 0.05. 
-                        So the price entered can be 9.5 or 9.65. It cannot be 9.67. 
+            price (float): Price should be an integer multiple of Tick Size. For example, IDEA's tick size is 0.05.
+                        So the price entered can be 9.5 or 9.65. It cannot be 9.67.
                         In case of market orders, you should send the Last Trade Price received from the Quote API or Websocket API
-            trigger_price (float): To be used for Stop loss orders. For BUY side SL orders, trigger_price should be 
+            trigger_price (float): To be used for Stop loss orders. For BUY side SL orders, trigger_price should be
                                 lesser than price. for SELL side SL orders, trigger_price should be greater than price.
             disclosed_quantity (int): Can be any number lesser than or equal to quantity, including 0
-            validity (Constants.ValidityTypes): Can be DAY for orders which are valid throughout the day, or IOC. 
+            validity (Constants.ValidityTypes): Can be DAY for orders which are valid throughout the day, or IOC.
                             IOC order will be cancelled if it is not traded immediately
+            ticker (str, optional): Instrument ticker in the form ``<EXCHANGE>:<SYMBOL>`` (e.g. "NSE:RELIANCE").
+                Pass this as an alternative to ``exchange`` and ``token``.
+                Either ``ticker`` or (``exchange`` and ``token``) must be provided.
         Returns:
             dict: JSON response containing the details of the placed order
 
         Raises:
             HTTPError: If any HTTP error occurs during the API call
+            ValueError: If neither ``ticker`` nor (``exchange`` and ``token``) is provided.
         """
 
+        if ticker is None and (exchange is None or token is None):
+            raise ValueError("Either 'ticker' or both 'exchange' and 'token' must be provided")
+
+        if ticker is None:
+            _warn_token_exchange_deprecated("place_order")
+
+        for required_name, required_value in (
+            ("transaction_type", transaction_type), ("product", product), ("variety", variety),
+            ("quantity", quantity), ("price", price), ("trigger_price", trigger_price),
+            ("disclosed_quantity", disclosed_quantity), ("validity", validity),
+        ):
+            if required_value is None:
+                raise TypeError(f"missing required argument: '{required_name}'")
+
         endpoint = "/trading/orders/regular"
-        if validity == Constants.ValidityTypes.FULL_DAY: 
-            validity_days = 1 
+        if validity == Constants.ValidityTypes.FULL_DAY:
+            validity_days = 1
             is_amo = False
-        elif validity == Constants.ValidityTypes.IMMEDIATE_OR_CANCEL: 
-            validity_days = 0 
+        elif validity == Constants.ValidityTypes.IMMEDIATE_OR_CANCEL:
+            validity_days = 0
             is_amo = False
-        else: 
-            validity_days = 1 
-            is_amo = True 
+        else:
+            validity_days = 1
+            is_amo = True
 
         data = {
-            "exchange": exchange,
-            "token": token,
             "transaction_type": transaction_type,
             "product": product,
             "variety": variety,
@@ -343,7 +401,13 @@ class VortexAPI:
             "validity_days": validity_days,
             "is_amo": is_amo
         }
-        
+
+        if ticker is not None:
+            data["ticker"] = ticker
+        else:
+            data["exchange"] = exchange
+            data["token"] = token
+
         return self._make_api_request("POST", endpoint, data=data)
     
     def modify_order(self, order_id: str, variety: Constants.VarietyTypes, quantity: int, traded_quantity: int, price: float, trigger_price: float, disclosed_quantity: int, validity: Constants.ValidityTypes) -> dict:
@@ -492,43 +556,60 @@ class VortexAPI:
         endpoint = "/user/funds"
         return self._make_api_request("GET", endpoint)
     
-    def get_order_margin(self, exchange: Constants.ExchangeTypes, token: int, transaction_type: Constants.TransactionSides, product: Constants.ProductTypes, variety: Constants.VarietyTypes, 
-                     quantity: int, price: float,mode: Constants.OrderMarginModes, old_quantity: int = 0 , old_price: float = 0 ) -> dict:
+    def get_order_margin(self, exchange: Constants.ExchangeTypes = None, token: int = None, transaction_type: Constants.TransactionSides = None, product: Constants.ProductTypes = None, variety: Constants.VarietyTypes = None,
+                     quantity: int = None, price: float = None, mode: Constants.OrderMarginModes = None, old_quantity: int = 0, old_price: float = 0, ticker: str = None) -> dict:
         """
         Get the margin required for placing an order for a specific security.
 
-        Documentation:    
+        Documentation:
             https://vortex.rupeezy.in/docs/latest/margin/#order-margin
 
         Args:
-            exchange (Constants.ExchangeTypes): Possible values: [NSE_EQ, NSE_FO, BSE_EQ, BSE_FO, NSE_CD or MCX_FO]
-            token (int): Security token of the scrip. It can be found in the scripmaster file
+            exchange (Constants.ExchangeTypes, optional): Possible values: [NSE_EQ, NSE_FO, BSE_EQ, BSE_FO, NSE_CD or MCX_FO].
+                Required together with ``token`` when ``ticker`` is not supplied.
+            token (int, optional): Security token of the scrip. It can be found in the scripmaster file.
+                Required together with ``exchange`` when ``ticker`` is not supplied.
             transaction_type (Constants.TransactionSides): Possible values: [BUY, SELL]
             product (Constants.ProductTypes): Possible values: [INTRADAY, DELIVERY, MTF]. MTF product can only be used in NSE_EQ exchange.
-            variety (Constants.VarietyTypes): Possible values: [RL, RL-MKT, SL, SL-MKT]. RL means regular orders, SL means Stop Loss order. 
+            variety (Constants.VarietyTypes): Possible values: [RL, RL-MKT, SL, SL-MKT]. RL means regular orders, SL means Stop Loss order.
                         MKT means that the trade will happen at market price
-            quantity (int): For exchange NSE_FO, if you want to trade in 2 lots and lot size is 50, you should pass 100. 
-                            In all other exchanges, you should pass just the number of lots. For example, in MCX_FO, 
+            quantity (int): For exchange NSE_FO, if you want to trade in 2 lots and lot size is 50, you should pass 100.
+                            In all other exchanges, you should pass just the number of lots. For example, in MCX_FO,
                             if you want to trade 5 lots, you should pass just 5.
-            price (float): Price should be an integer multiple of Tick Size. For example, IDEA's tick size is 0.05. 
-                        So the price entered can be 9.5 or 9.65. It cannot be 9.67. 
+            price (float): Price should be an integer multiple of Tick Size. For example, IDEA's tick size is 0.05.
+                        So the price entered can be 9.5 or 9.65. It cannot be 9.67.
                         In case of market orders, you should send the Last Trade Price received from the Quote API or Websocket API
-            mode (Constants.OrderMarginModes): Possible values: [NEW, MODIFY] , Whether you are trying to modify an existing order or placing a new order.            
+            mode (Constants.OrderMarginModes): Possible values: [NEW, MODIFY] , Whether you are trying to modify an existing order or placing a new order.
             old_quantity (int): For NSE_FO segments, old_quantity is lots * lot_size. For all others, enter just the number of lots. Required if mode is MODIFY
             old_price (float): Old Price in INR. Required if mode is MODIFY
+            ticker (str, optional): Instrument ticker in the form ``<EXCHANGE>:<SYMBOL>`` (e.g. "NSE:RELIANCE").
+                Pass this as an alternative to ``exchange`` and ``token``.
+                Either ``ticker`` or (``exchange`` and ``token``) must be provided.
 
         Returns:
             dict: JSON response containing the details of the margin required to place the order
 
         Raises:
             HTTPError: If any HTTP error occurs during the API call
+            ValueError: If neither ``ticker`` nor (``exchange`` and ``token``) is provided.
         """
-        
+
+        if ticker is None and (exchange is None or token is None):
+            raise ValueError("Either 'ticker' or both 'exchange' and 'token' must be provided")
+
+        if ticker is None:
+            _warn_token_exchange_deprecated("get_order_margin")
+
+        for required_name, required_value in (
+            ("transaction_type", transaction_type), ("product", product), ("variety", variety),
+            ("quantity", quantity), ("price", price), ("mode", mode),
+        ):
+            if required_value is None:
+                raise TypeError(f"missing required argument: '{required_name}'")
+
         endpoint = "/margins/order"
-        
+
         data = {
-            "exchange": exchange,
-            "token": token,
             "transaction_type": transaction_type,
             "product": product,
             "variety": variety,
@@ -538,6 +619,13 @@ class VortexAPI:
             "old_price": old_price,
             "mode": mode,
         }
+
+        if ticker is not None:
+            data["ticker"] = ticker
+        else:
+            data["exchange"] = exchange
+            data["token"] = token
+
         return self._make_api_request("POST", endpoint, data=data)
     
     def brokerage_plan(self)-> dict: 
@@ -561,7 +649,7 @@ class VortexAPI:
             https://vortex.rupeezy.in/docs/latest/historical/#fetch-price-quotes
 
         Args:
-            instrument(list): List of instruments. The items should be like ( "NSE_EQ-22", "NSE_FO-1234")
+            instrument(list): List of instrument tickers. The items should be like ( "NSE:RELIANCE", "NSE:NIFTYIDX")
             mode(Constants.QuoteModes): Quote mode. Can be ["ltp","ohlcv", "full"]. LTP quotes just give the last trade price, ohlc give open, high, low, close and volume, full mode also gives depth.
 
         Returns:
@@ -572,35 +660,48 @@ class VortexAPI:
         params = {"q": instruments,"mode": mode}
         return self._make_api_request("GET", endpoint, data=None,params=params)
     
-    def historical_candles(self, exchange: Constants.ExchangeTypes, token: int, to: datetime.datetime , start: datetime.datetime, resolution: Constants.Resolutions): 
+    def historical_candles(self, exchange: Constants.ExchangeTypes = None, token: int = None, to: datetime.datetime = None, start: datetime.datetime = None, resolution: Constants.Resolutions = None, ticker: str = None):
         """
-        Gets historical candle data of a particular instrument. 
+        Gets historical candle data of a particular instrument.
 
-        Documentation:    
+        Documentation:
             https://vortex.rupeezy.in/docs/latest/historical/#fetch-historical-candle-data
 
         Args:
-            exchange (Constants.ExchangeTypes): Possible values: [NSE_EQ, NSE_FO, BSE_EQ, BSE_FO, NSE_CD or MCX_FO]
-            token (int): Security token of the scrip. It can be found in the instruments master file: 
-            to (datetime): datetime up till when you want to receive candles 
-            start (datetime): datetime from when you want to receive candles 
+            exchange (Constants.ExchangeTypes, optional): Possible values: [NSE_EQ, NSE_FO, BSE_EQ, BSE_FO, NSE_CD or MCX_FO].
+                Required together with ``token`` when ``ticker`` is not supplied.
+            token (int, optional): Security token of the scrip. It can be found in the instruments master file.
+                Required together with ``exchange`` when ``ticker`` is not supplied.
+            to (datetime): datetime up till when you want to receive candles
+            start (datetime): datetime from when you want to receive candles
             resolution (Constants.Resolutions): resoulution of the candle. can be "1", "2", "3", "4", "5", "10", "15", "30", "45", "60", "120", "180", "240", "1D", "1W", "1M"
-        
+            ticker (str, optional): Instrument ticker in the form ``<EXCHANGE>:<SYMBOL>`` (e.g. "NSE:RELIANCE").
+                Pass this as an alternative to ``exchange`` and ``token``.
+                Either ``ticker`` or (``exchange`` and ``token``) must be provided.
+
         Returns:
             dict: JSON response containing the historical candles
         """
 
-        if not isinstance(token, int):
-            raise TypeError("token must be an integer")
-        if not isinstance(to,datetime.datetime): 
+        if ticker is None and (exchange is None or token is None):
+            raise ValueError("Either 'ticker' or both 'exchange' and 'token' must be provided")
+        if ticker is None:
+            _warn_token_exchange_deprecated("historical_candles")
+            if not isinstance(token, int):
+                raise TypeError("token must be an integer")
+        if not isinstance(to, datetime.datetime):
             raise TypeError("to must be a datetime")
-        if not isinstance(start,datetime.datetime): 
+        if not isinstance(start, datetime.datetime):
             raise TypeError("start must be a datetime")
 
-
         endpoint = "/data/history"
-        params = {"exchange": exchange,"token": token , "to": int(to.timestamp()), "from": int(start.timestamp()), "resolution": resolution}
-        return self._make_api_request("GET", endpoint, data=None,params=params)
+        params = {"to": int(to.timestamp()), "from": int(start.timestamp()), "resolution": resolution}
+        if ticker is not None:
+            params["ticker"] = ticker
+        else:
+            params["exchange"] = exchange
+            params["token"] = token
+        return self._make_api_request("GET", endpoint, data=None, params=params)
 
     def login_url(self, callback_param: str) -> str:
         """
@@ -660,6 +761,289 @@ class VortexAPI:
             return True
 
         return False
+
+    def mf_holdings(self) -> dict:
+        """
+        Get the mutual fund holdings of the user.
+
+        Returns:
+            dict: JSON response with the following structure::
+
+                {
+                    "status": str,
+                    "message": str,
+                    "data": {
+                        "OverallConfig": {
+                            "OverAllXirr": float,
+                            "MarketValueAmount": float,
+                            "InvestedAmount": float,
+                            "Returns": float,
+                            "ReturnsPercentage": float,
+                            "LastImportedAt": str or None,    # ISO datetime
+                            "FundsImportStatus": str,
+                            "OneDayReturns": float,
+                            "OneDayReturnsPercentage": float,
+                            "NavAsOn": str                    # ISO datetime
+                        },
+                        "IsinWiseData": {
+                            "<ISIN>": {
+                                "Name": str,
+                                "MarketValueAmount": float,
+                                "InvestedAmount": float,
+                                "Returns": float,
+                                "ReturnsPercentage": float,
+                                "OneDayReturns": float,
+                                "OneDayReturnsPercentage": float,
+                                "IsinXirr": float,
+                                "BseScheme": dict or None,
+                                "CmotsScheme": dict or None,
+                                "Folios": [
+                                    {
+                                        "xirr": float,
+                                        "client_code": str,
+                                        "dpam_id": int,
+                                        "folio_number": str,
+                                        "folio_xirr": float,
+                                        "isin": str,
+                                        "co_code": int,
+                                        "name": str,
+                                        "type": str,
+                                        "units": float,
+                                        "redeemable_units": float,
+                                        "market_value_amount": float,
+                                        "redeemable_amount": float,
+                                        "invested_amount": float,
+                                        "nav_value": float,
+                                        "buy_price": float,
+                                        "as_on": str or None,
+                                        "hold_type": str,
+                                        "is_demat": str,
+                                        "one_day_returns": float,
+                                        "one_day_returns_percentage": float
+                                    }
+                                ]
+                            }
+                        }
+                    }
+                }
+        """
+        endpoint = "/mf/holdings"
+        return self._make_api_request("GET", endpoint)
+
+    def fund_details(self, isin: str) -> dict:
+        """
+        Get details of a mutual fund scheme by ISIN.
+
+        Args:
+            isin (str): ISIN of the mutual fund scheme
+
+        Returns:
+            dict: JSON response with the following structure::
+
+                {
+                    "status": str,
+                    "data": {
+                        "assetAllocation": [
+                            {
+                                "Isin": str,
+                                "AssetCode": int,
+                                "AssetName": str,
+                                "Holding_CurrentMonth": float,
+                                "Holding_PrevMonth": float,
+                                "CurrentMonth": str
+                            }
+                        ],
+                        "sectorAllocation": [
+                            {
+                                "Isin": str,
+                                "VALUE": float,
+                                "PERC_HOLD": float,
+                                "SECTOR": str,
+                                "AsOnDate": str           # ISO datetime
+                            }
+                        ],
+                        "holdingAllocation": [
+                            {
+                                "Isin": str,
+                                "co_code": int,
+                                "co_name": str,
+                                "invdate": str,
+                                "InvDate": str,           # ISO datetime
+                                "Perc_hold": float,
+                                "MktValue": float,
+                                "TotalShares": float,
+                                "AssetType": str,
+                                "rating": str
+                            }
+                        ],
+                        "cmotsDetails": {
+                            "isin": str,
+                            "sch_name": str,
+                            "navrs": float,
+                            "Navdate": str,
+                            "FundManager": str,
+                            "SchemeAUM": float,
+                            "EXPRATIO": float,
+                            "riskometervalue": str,
+                            "BenchmarkName": str,
+                            "Category": str,
+                            "fund_rating": int or None,
+                            ...
+                        },
+                        "bseSchemeDetails": {
+                            "ISIN": str,
+                            "SchemeCode": str,
+                            "SchemeName": str,
+                            "SchemeType": str,
+                            "SchemePlan": str,
+                            "PurchaseAllowed": str,
+                            "RedemptionAllowed": str,
+                            "SIPFlag": str,
+                            "MinimumPurchaseAmount": float,
+                            "MinimumRedemptionQty": float,
+                            ...
+                        }
+                    }
+                }
+        """
+        endpoint = "/mf/fund/details"
+        params = {"isin": isin}
+        return self._make_api_request("GET", endpoint, params=params)
+
+    def fund_navs(self, isin: str) -> dict:
+        """
+        Get historical NAV data for a mutual fund scheme.
+
+        Args:
+            isin (str): ISIN of the mutual fund scheme
+
+        Returns:
+            dict: JSON response with the following structure::
+
+                {
+                    "status": str,
+                    "data": [
+                        {
+                            "date": str,      # ISO datetime
+                            "value": float    # NAV value
+                        }
+                    ]
+                }
+        """
+        endpoint = "/mf/fund/navs"
+        params = {"isin": isin}
+        return self._make_api_request("GET", endpoint, params=params)
+
+    def portfolio_impact(self, isin: str, amount: float) -> dict:
+        """
+        Get the portfolio impact of adding a mutual fund scheme.
+
+        Args:
+            isin (str): ISIN of the mutual fund scheme
+            amount (float): Investment amount
+
+        Returns:
+            dict: JSON response with the following structure::
+
+                {
+                    "status": str,
+                    "data": {
+                        "New": {
+                            "Returns": float,
+                            "Risk": float
+                        },
+                        "Original": {
+                            "Returns": float,
+                            "Risk": float
+                        }
+                    }
+                }
+        """
+        endpoint = "/mf/fund/portfolio-impact"
+        params = {"isin": isin, "amount": amount}
+        return self._make_api_request("GET", endpoint, params=params)
+
+    def fund_overlap(self, isin: str, amount: float) -> dict:
+        """
+        Get the fund overlap analysis for a mutual fund scheme against existing holdings.
+
+        Args:
+            isin (str): ISIN of the mutual fund scheme
+            amount (float): Investment amount
+
+        Returns:
+            dict: JSON response with the following structure::
+
+                {
+                    "status": str,
+                    "data": {
+                        "Value": float,
+                        "Overlaps": [
+                            {
+                                "Isin": str,
+                                "Holdings": [
+                                    {
+                                        "Name": str,
+                                        "Value": float
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                }
+        """
+        endpoint = "/mf/fund/portfolio-overlap"
+        params = {"isin": isin, "amount": amount}
+        return self._make_api_request("GET", endpoint, params=params)
+
+    def sip_book(self) -> dict:
+        """
+        Get the SIP (Systematic Investment Plan) book of the user.
+
+        Returns:
+            dict: JSON response with the following structure::
+
+                {
+                    "status": str,
+                    "data": [
+                        {
+                            "ID": int,
+                            "CreatedAt": str,                     # ISO datetime
+                            "UpdatedAt": str,                     # ISO datetime
+                            "transactionCode": str,
+                            "isin": str,
+                            "amount": float,
+                            "clientCode": str,
+                            "schemeCode": str,
+                            "remarks": str,
+                            "startDate": str,                     # ISO datetime
+                            "startDay": int,
+                            "modifiedStartDate": str or None,     # ISO datetime
+                            "mandateId": str,
+                            "state": str,
+                            "frequency": str,
+                            "stepUp": bool,
+                            "stepUpFrequency": str,
+                            "stepUpPercentage": float,
+                            "stepUpAmount": float,
+                            "isAmcSip": bool,
+                            "initialInvestmentAmount": float,
+                            "buySellType": str,
+                            "nextInstallmentDate": str or None,   # ISO datetime
+                            "installmentNumber": int,
+                            "schemeName": str,
+                            "coCode": int,
+                            "schemes_details": {
+                                "bseSchemeDetails": dict,
+                                "cmotsDetails": dict,
+                                "nfoDetails": dict
+                            }
+                        }
+                    ]
+                }
+        """
+        endpoint = "/mf/purchases/synthetic/plan"
+        return self._make_api_request("GET", endpoint)
 
     def save_backtest_result(self, stats, name: str, symbol: str = "", description: str = "", tags: list = None) -> dict:
         """
