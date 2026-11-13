@@ -22,10 +22,12 @@ class ClientProtocol(WebSocketClientProtocol):
 
     Args:
         PING_INTERVAL: The interval in seconds between sending pings.
-        KEEPALIVE_INTERVAL: The interval in seconds after which a connection is considered dead if no pongs have been received.
+        KEEPALIVE_INTERVAL: The interval in seconds after which a connection is considered dead if nothing (no pong, no message) has been received.
     """
     PING_INTERVAL = 2.5
-    KEEPALIVE_INTERVAL = 5
+    # Generous on purpose: a strategy busy in its tick callback reads the pong late,
+    # and a 5 s limit dropped healthy sockets every ~7 s in a reconnect loop.
+    KEEPALIVE_INTERVAL = 30
 
     _ping_message = ""
     _next_ping = None
@@ -73,6 +75,8 @@ class ClientProtocol(WebSocketClientProtocol):
             payload: The message payload.
             is_binary: Whether the message is binary.
         """
+        # Any frame from the server proves the connection is alive.
+        self._last_pong_time = time.time()
         if self.factory.on_message:
             self.factory.on_message(self, payload, is_binary)
 
@@ -142,7 +146,7 @@ class ClientProtocol(WebSocketClientProtocol):
         if self._last_pong_time:
             # No pong message since long time, so init reconnect
             last_pong_diff = time.time() - self._last_pong_time
-            if last_pong_diff > (2 * self.PING_INTERVAL):
+            if last_pong_diff > self.KEEPALIVE_INTERVAL:
                 if self.factory.debug:
                     log.debug("Last pong was {} seconds ago. So dropping connection to reconnect.".format(
                         last_pong_diff))
